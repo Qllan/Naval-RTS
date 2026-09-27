@@ -13,7 +13,7 @@ from .combat import lead_point, try_fire, update_lock, update_projectile
 from .entities import RESOURCES, Loot, ResourceNode, Smoke
 from .events import EventDirector
 from .hulls import HULLS
-from .modules import MODULES
+from .modules import AMMO, AMMO_ORDER, MODULES
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship, fit_problems
 from .veil import Veil
 
@@ -23,6 +23,8 @@ SUBSYSTEM_REPAIR_COST = 80      # за 100% одной подсистемы
 ARMOR_REPAIR_COST = 0.8         # за единицу брони
 LOCK_PICK_RADIUS = 260.0        # насколько близко к курсору должна быть цель для захвата
 FIRE_CONTROL_RADIUS = 140.0     # цель ближе к курсору — турели сами берут упреждение
+AMMO_PACK = 100                 # снарядов в одной покупке
+LEAK_REPAIR_COST = 40
 
 
 @dataclass
@@ -35,6 +37,8 @@ class Controls:
     aim: Vector2 | None = None
     mine: bool = False
     activate: list = field(default_factory=list)   # номера активных утилит, нажатые в этом кадре
+    pips: list = field(default_factory=list)       # "shields" | "engines" | "weapons" | "reset"
+    cycle_ammo: bool = False
 
 
 @dataclass
@@ -45,6 +49,7 @@ class Captain:
     trauma: bool = False
     cargo: dict = field(default_factory=dict)
     storage: list = field(default_factory=list)     # модули на складе порта
+    ammo_stock: dict = field(default_factory=lambda: {"ap": 0, "he": 0})
     pending_insurance: int = 0
     kills: int = 0
 
@@ -65,6 +70,7 @@ class World:
         self.emp_timer = 0.0
         self.lock_candidate = None
         self.gun_target = None
+        self.ammo_type = "std"
 
         self.pirates: list[Pirate] = []
         self.tihodonts: list[Tihodont] = []
@@ -196,6 +202,13 @@ class World:
         p.drain_shield(self.events.modifier("shield_drain", p.pos, self.t) * dt)
 
         if not self.in_capsule:
+            for sys_ in ctl.pips:
+                if sys_ == "reset":
+                    p.reset_pips()
+                else:
+                    p.add_pip(sys_)
+            if ctl.cycle_ammo:
+                self.cycle_ammo()
             self._player_weapons(dt, ctl, density)
             for idx in ctl.activate:
                 self._activate_utility(idx)
@@ -256,22 +269,45 @@ class World:
         noise = Vector2(self.rng.gauss(0, 1), self.rng.gauss(0, 1)) * 60 * density if self.gun_target else None
         for m in p.weapons:
             kind = m.defn.kind
+            held = {1: ctl.fire, 2: ctl.fire2}.get(m.group, False)
             if kind == "gun":
                 point = lead_point(m.world_pos(p), self.gun_target, m.defn.speed, noise) if self.gun_target else aim
                 aimed = m.aim(p, point, dt)
-                if ctl.fire and aimed:
-                    self.projectiles += try_fire(p, m, self.rng, density, point, acc)
+                if held and aimed:
+                    shots = try_fire(p, m, self.rng, density, point, acc, ammo=self.ammo_type)
+                    self._spend_ammo(shots)
+                    self.projectiles += shots
             elif kind == "missile":
-                tgt = self.lock_candidate if ctl.fire2 else None
+                tgt = self.lock_candidate if held else None
                 visible = tgt is not None and tgt.pos.distance_to(p.pos) < m.defn.range
                 update_lock(m, p, tgt, visible, density, dt)
-                if ctl.fire2:
+                if held:
                     shots = try_fire(p, m, self.rng, density)
                     if shots:
                         m.lock = 0.0
                     self.projectiles += shots
-            elif kind == "torpedo" and ctl.fire2:
+            elif kind == "torpedo" and held:
                 self.projectiles += try_fire(p, m, self.rng, density)
+
+    def cycle_ammo(self):
+        """Следующий тип снарядов, на который есть запас."""
+        i = AMMO_ORDER.index(self.ammo_type)
+        for step in range(1, len(AMMO_ORDER) + 1):
+            key = AMMO_ORDER[(i + step) % len(AMMO_ORDER)]
+            if key == "std" or self.captain.ammo_stock.get(key, 0) > 0:
+                self.ammo_type = key
+                break
+        self.say(f"Снаряды: {AMMO[self.ammo_type].name}")
+
+    def _spend_ammo(self, shots):
+        if self.ammo_type == "std" or not shots:
+            return
+        stock = self.captain.ammo_stock
+        used = sum(1 for sh in shots if sh.ammo == self.ammo_type)
+        stock[self.ammo_type] = max(0, stock[self.ammo_type] - used)
+        if stock[self.ammo_type] == 0:
+            self.say(f"{AMMO[self.ammo_type].name} снаряды кончились — стандартные.")
+            self.ammo_type = "std"
 
     def _activate_utility(self, idx):
         p = self.player
@@ -336,6 +372,16 @@ class World:
         for pr in self.pirates:
             s = pr.ship
             d = self.density_at(s.pos)
+            # Простая тактика энергии: под огнём — в щиты, при погоне — в двигатель
+            if pr.state == "attack":
+                if s.shield_max and s.shield < s.shield_max * 0.3:
+                    s.set_pips(4, 1, 1)
+                else:
+                    s.set_pips(1, 2, 3)
+            elif pr.state in ("chase", "flee"):
+                s.set_pips(1, 4, 1)
+            else:
+                s.set_pips(2, 2, 2)
             throttle, turn, sees = pr.think(p.pos, sig, d, dt)
             s.update(dt, throttle, turn, False, d)
             dist = s.pos.distance_to(p.pos)
@@ -385,9 +431,15 @@ class World:
                     hit = ship
                     break
             if hit is not None:
-                sub = hit.apply_damage(pr.damage, pr.dtype, self.rng)
-                if hit is p and sub:
-                    self.say(f"Повреждение: {SUBSYSTEM_NAME[sub]}")
+                fires, leaks = hit.fires, hit.leaks
+                sub = hit.apply_damage(pr.damage, pr.dtype, self.rng, pr.ammo)
+                if hit is p:
+                    if sub:
+                        self.say(f"Повреждение: {SUBSYSTEM_NAME[sub]}")
+                    if hit.fires > fires:
+                        self.say("Пожар на борту!")
+                    if hit.leaks > leaks:
+                        self.say("Пробоина! Корабль набирает воду.")
                 continue
             if pr.life > 0:
                 keep.append(pr)
@@ -503,6 +555,7 @@ class World:
         p = self.player
         cost = (p.hull.hp - p.hp) * C.REPAIR_COST_PER_HP + (p.armor_max - p.armor) * ARMOR_REPAIR_COST
         cost += sum(1.0 - p.subsystems[k] for k in SUBSYSTEMS) * SUBSYSTEM_REPAIR_COST
+        cost += (p.leaks + p.water * 3) * LEAK_REPAIR_COST
         return int(math.ceil(cost))
 
     def repair(self):
@@ -529,6 +582,20 @@ class World:
         for u in self.player.utilities:
             u.charges = u.defn.charges
         return True
+
+    def ammo_pack_cost(self, kind):
+        return AMMO[kind].price * AMMO_PACK
+
+    def buy_ammo(self, kind):
+        cost = self.ammo_pack_cost(kind)
+        if self.captain.credits < cost:
+            return False
+        self.captain.credits -= cost
+        self.captain.ammo_stock[kind] = self.captain.ammo_stock.get(kind, 0) + AMMO_PACK
+        return True
+
+    def cycle_group(self, slot_index):
+        return self.player.cycle_group(slot_index)
 
     def clean_hull(self):
         if self.player.fouling <= 0.01 or self.captain.credits < C.CLEAN_COST:

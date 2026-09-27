@@ -5,7 +5,9 @@
   Пелене прожорливее; при нуле в конденсаторе — «просадка»: щиты гаснут, радар слепнет;
 - масса: модули и груз снижают разгон, скорость и манёвренность;
 - защита слоями: щит → броня → корпус, с разной реакцией на типы урона;
-- подсистемы (двигатель, руль, сенсоры, орудия) деградируют от попаданий.
+- подсистемы (двигатель, руль, сенсоры, орудия) деградируют от попаданий;
+- распределение энергии (щиты / двигатель / орудия), группы огня, нагрев орудий;
+- живучесть: пожары жгут корпус, течи набирают воду — корабль тяжелеет и кренится.
 """
 
 import math
@@ -14,13 +16,37 @@ from pygame.math import Vector2
 
 from . import config as C
 from .hulls import HULLS
-from .modules import (MODULES, ArmorDef, EngineDef, ReactorDef, SensorDef, ShieldDef, UtilityDef,
+from .modules import (AMMO, MODULES, ArmorDef, EngineDef, ReactorDef, SensorDef, ShieldDef, UtilityDef,
                       WeaponDef)
 
 SUBSYSTEMS = ("engine", "rudder", "sensors", "weapons")
 SUBSYSTEM_NAME = {"engine": "Двигатель", "rudder": "Руль", "sensors": "Сенсоры", "weapons": "Орудия"}
 CARGO_MASS = 0.8          # масса единицы груза
 VEIL_UPKEEP = 1.5         # +150% потребления электроники при плотности 1.0
+
+# Распределение энергии: 6 делений на три системы, от 0 до 4 на каждую
+PIP_SYSTEMS = ("shields", "engines", "weapons")
+PIP_NAME = {"shields": "Щиты", "engines": "Двигатель", "weapons": "Орудия"}
+PIP_TOTAL, PIP_MAX = 6, 4
+
+HEAT_MAX = 100.0
+HEAT_DISSIPATION = 18.0   # ед/с при 2 делениях на орудия
+HEAT_RECOVER = 40.0       # после перегрева стрелять можно, когда остынет до этого уровня
+
+MAX_FIRES = 3
+MAX_LEAKS = 4
+FIRE_DPS = 2.5            # урон корпусу за один очаг в секунду
+CREW_FIRE_TIME = 16.0     # экипаж сам тушит один очаг за это время
+CREW_LEAK_TIME = 22.0     # и заделывает одну течь
+LEAK_RATE = 0.035         # доля «запаса плавучести» в секунду на одну течь
+PUMP_RATE = 0.012
+WATER_MASS = 0.7          # полный запас воды = 70% массы корпуса
+SINK_DPS = 10.0           # урон корпусу, когда корабль полон воды
+
+
+def default_group(defn):
+    """Пушки — на ЛКМ (1), ракеты и торпеды — на ПКМ (2)."""
+    return 1 if defn.kind == "gun" else 2
 
 
 def heading(angle):
@@ -63,6 +89,8 @@ class WeaponMount:
         self.ammo = defn.ammo
         self.lock_target = None
         self.lock = 0.0                   # 0..1
+        self.heat = 0.0
+        self.overheated = False
 
     @property
     def arc(self):
@@ -91,7 +119,7 @@ class WeaponMount:
         want = norm_angle(Vector2(1, 0).angle_to(to) - ship.angle - self.slot.facing)
         half = self.arc / 2
         target = max(-half, min(half, want))
-        speed = self.defn.traverse * (0.3 + 0.7 * ship.subsystems["weapons"])
+        speed = self.defn.traverse * (0.3 + 0.7 * ship.subsystems["weapons"]) * ship.pip_mult("weapons")
         step = speed * dt
         diff = target - self.rel
         self.rel += max(-step, min(step, diff))
@@ -100,6 +128,10 @@ class WeaponMount:
     @property
     def has_ammo(self):
         return self.defn.ammo == 0 or self.ammo > 0
+
+    @property
+    def group(self):
+        return self._ship_groups.get(self.index, default_group(self.defn))
 
 
 class UtilityState:
@@ -131,6 +163,13 @@ class Ship:
         self.brownout = False
         self.reload_penalty = 1.0          # внешние штрафы (травма капитана)
         self.subsystems = {k: 1.0 for k in SUBSYSTEMS}
+        self.pips = {"shields": 2, "engines": 2, "weapons": 2}
+        self.groups = {}                   # слот → группа огня (1 — ЛКМ, 2 — ПКМ, 0 — выкл.)
+        self.fires = 0
+        self.leaks = 0
+        self.water = 0.0                   # 0..1 — сколько воды набрал корпус
+        self._fire_timer = 0.0
+        self._leak_timer = 0.0
         self.rebuild()
         self.hp = self.hull.hp
         self.armor = self.armor_max
@@ -172,7 +211,8 @@ class Ship:
             w = WeaponMount(i, slot, m)
             old = old_weapons.get(i)
             if old and old.defn is m:
-                w.ammo, w.rel = old.ammo, old.rel
+                w.ammo, w.rel, w.heat, w.overheated = old.ammo, old.rel, old.heat, old.overheated
+            w._ship_groups = self.groups
             self.weapons.append(w)
         self.utilities = []
         for i, _, m in self.modules(UtilityDef):
@@ -190,7 +230,46 @@ class Ship:
 
     def set_module(self, slot_index, key):
         self.fit[slot_index] = key
+        self.groups.pop(slot_index, None)          # новая установка — группа по умолчанию
         self.rebuild()
+
+    def cycle_group(self, slot_index):
+        """ЛКМ → ПКМ → выкл. → ЛКМ. Возвращает новую группу или None, если в слоте не оружие."""
+        w = next((w for w in self.weapons if w.index == slot_index), None)
+        if w is None:
+            return None
+        self.groups[slot_index] = {1: 2, 2: 0, 0: 1}[w.group]
+        return self.groups[slot_index]
+
+    # --- распределение энергии -------------------------------------------
+
+    def add_pip(self, system):
+        """Перекинуть одно деление в систему — с той, где их больше всего."""
+        if self.pips[system] >= PIP_MAX:
+            return False
+        donors = [k for k in PIP_SYSTEMS if k != system and self.pips[k] > 0]
+        if not donors:
+            return False
+        donor = max(donors, key=lambda k: self.pips[k])
+        self.pips[donor] -= 1
+        self.pips[system] += 1
+        return True
+
+    def reset_pips(self):
+        self.pips = {k: PIP_TOTAL // len(PIP_SYSTEMS) for k in PIP_SYSTEMS}
+
+    def set_pips(self, shields, engines, weapons):
+        assert shields + engines + weapons == PIP_TOTAL
+        self.pips = {"shields": shields, "engines": engines, "weapons": weapons}
+
+    def pip_mult(self, system):
+        """Множитель эффективности системы: 2 деления = 1.0."""
+        p = self.pips[system]
+        if system == "shields":
+            return 0.5 + 0.25 * p          # восстановление щита 0.5…1.5
+        if system == "engines":
+            return 0.85 + 0.075 * p        # тяга и скорость 0.85…1.15
+        return 0.8 + 0.1 * p               # скорострельность, наводка, охлаждение 0.8…1.2
 
     # --- производные показатели ------------------------------------------
 
@@ -208,7 +287,13 @@ class Ship:
 
     @property
     def mass(self):
-        return self.hull.mass + self.module_mass + self.cargo_mass * CARGO_MASS
+        return (self.hull.mass + self.module_mass + self.cargo_mass * CARGO_MASS
+                + self.water * self.hull.mass * WATER_MASS)
+
+    @property
+    def list_angle(self):
+        """Крен от набранной воды, град. Мешает целиться."""
+        return self.water * 12.0
 
     @property
     def cargo_capacity(self):
@@ -226,7 +311,7 @@ class Ship:
     def base_top_speed(self):
         if not self.engine:
             return 0.0
-        return self.engine.top_speed * self.hull.speed_mult * self.mass_factor()
+        return self.engine.top_speed * self.hull.speed_mult * self.mass_factor() * self.pip_mult("engines")
 
     def max_speed(self):
         s = self.base_top_speed() * (1.0 - 0.55 * self.fouling) * (0.35 + 0.65 * self.subsystems["engine"])
@@ -291,7 +376,7 @@ class Ship:
         self.angle = (self.angle + turn * turn_rate * speed_k * dt) % 360
 
         if self.engine:
-            accel = self.engine.thrust * 100.0 / self.mass
+            accel = self.engine.thrust * 100.0 / self.mass * self.pip_mult("engines")
             accel *= (1.0 - 0.4 * self.fouling) * (0.35 + 0.65 * self.subsystems["engine"])
             accel *= 1.6 if self.boosting else 1.0
             if throttle < 0:
@@ -321,14 +406,20 @@ class Ship:
         if self.shield_cd > 0:
             self.shield_cd -= dt
         elif self.shield_def and self.shield < self.shield_max and not self.brownout:
-            amount = min(self.shield_def.regen * dt, self.shield_max - self.shield)
+            amount = min(self.shield_def.regen * self.pip_mult("shields") * dt, self.shield_max - self.shield)
             cost = amount * self.shield_def.regen_cost
             if self.capacitor >= cost:
                 self.shield += amount
                 self.capacitor -= cost
 
+        cool = HEAT_DISSIPATION * self.pip_mult("weapons") * dt
         for w in self.weapons:
             w.reload = max(0.0, w.reload - dt)
+            w.heat = max(0.0, w.heat - cool)
+            if w.overheated and w.heat <= HEAT_RECOVER:
+                w.overheated = False
+
+        self._update_damage_control(dt)
         for u in self.utilities:
             u.cooldown = max(0.0, u.cooldown - dt)
             if u.active_time > 0:
@@ -337,6 +428,28 @@ class Ship:
                     self.hp = min(self.hull.hp, self.hp + u.defn.value * dt)
                     for k in SUBSYSTEMS:
                         self.subsystems[k] = min(1.0, self.subsystems[k] + 0.06 * dt)
+
+    def _update_damage_control(self, dt):
+        """Пожары жгут корпус, течи набирают воду. Экипаж постепенно справляется сам."""
+        if self.fires:
+            self.hp -= FIRE_DPS * self.fires * dt
+            self._fire_timer += dt
+            if self._fire_timer >= CREW_FIRE_TIME:
+                self._fire_timer = 0.0
+                self.fires -= 1
+        else:
+            self._fire_timer = 0.0
+        if self.leaks:
+            self._leak_timer += dt
+            if self._leak_timer >= CREW_LEAK_TIME:
+                self._leak_timer = 0.0
+                self.leaks -= 1
+        else:
+            self._leak_timer = 0.0
+        self.water += (LEAK_RATE * self.leaks - PUMP_RATE) * dt
+        self.water = min(1.0, max(0.0, self.water))
+        if self.water >= 1.0 and self.leaks:
+            self.hp -= SINK_DPS * dt
 
     # --- действия ---------------------------------------------------------
 
@@ -353,37 +466,49 @@ class Ship:
         u.active_time = u.defn.duration
         if u.defn.charges:
             u.charges -= 1
+        if u.defn.effect == "damage_control":
+            self.fires = 0
+            self.leaks = max(0, self.leaks - int(u.defn.value))
         return u
 
     def reload_mult(self):
-        return self.reload_penalty / (0.4 + 0.6 * self.subsystems["weapons"])
+        return self.reload_penalty / ((0.4 + 0.6 * self.subsystems["weapons"]) * self.pip_mult("weapons"))
 
     # --- урон -------------------------------------------------------------
 
-    def apply_damage(self, amount, dtype, rng):
-        """Щит → броня → корпус. Возвращает имя повреждённой подсистемы или None."""
+    def apply_damage(self, amount, dtype, rng, ammo="std"):
+        """Щит → броня → корпус. Возвращает имя повреждённой подсистемы или None.
+
+        `ammo` — тип снаряда (для пушек): меняет урон по каждому слою,
+        может пробивать броню, поджигать и чаще калечить подсистемы.
+        """
+        a = AMMO[ammo]
         self.shield_cd = 3.0
         if dtype != "torpedo" and self.shield > 0:
-            mult = 2.0 if dtype == "em" else 1.0
-            absorbed = min(self.shield, amount * mult)
+            mult = (2.0 if dtype == "em" else 1.0) * a.shield_mult
+            need = amount * mult
+            absorbed = min(self.shield, need)
             self.shield -= absorbed
-            amount -= absorbed / mult
+            amount *= 1.0 - absorbed / need
         if amount <= 0:
             return None
 
-        sub_chance = 0.0
+        sub_chance = a.sub_bonus
         if dtype == "em":
             sub_chance += 0.35
             amount *= 0.35
         if self.armor > 0:
-            if dtype == "kinetic":
-                amount = max(amount * 0.25, amount - self.armor_def.reduction)
-            absorbed = min(self.armor, amount)
+            dmg = amount * a.armor_mult
+            if dtype == "kinetic" and not a.pierce:
+                dmg = max(dmg * 0.25, dmg - self.armor_def.reduction)
+            absorbed = min(self.armor, dmg)
             self.armor -= absorbed
-            amount -= absorbed
+            amount *= 1.0 - absorbed / dmg if dmg > 0 else 0.0
         if amount > 0:
+            amount *= a.hull_mult
             self.hp -= amount
             sub_chance += min(0.7, amount / self.hull.hp * 4)
+            self._maybe_breach(amount, dtype, a, rng)
         if sub_chance > 0 and rng.random() < sub_chance:
             weights = {"engine": 3, "rudder": 2, "sensors": 3 if dtype == "em" else 2,
                        "weapons": 3 if dtype == "em" else 2}
@@ -397,6 +522,16 @@ class Ship:
                     return k
         return None
 
+    def _maybe_breach(self, hull_damage, dtype, ammo, rng):
+        """Пожары от взрывов, течи от торпед и от ударов по изношенному корпусу."""
+        fire_chance = ammo.fire_chance + (0.12 if dtype == "explosive" else 0.0)
+        if fire_chance and rng.random() < fire_chance * min(1.0, hull_damage / 10):
+            self.fires = min(MAX_FIRES, self.fires + 1)
+        if dtype == "torpedo":
+            self.leaks = min(MAX_LEAKS, self.leaks + (2 if hull_damage > 40 else 1))
+        elif self.hp < self.hull.hp * 0.4 and rng.random() < 0.12:
+            self.leaks = min(MAX_LEAKS, self.leaks + 1)
+
     def drain_shield(self, amount):
         if amount > 0:
             self.shield = max(0.0, self.shield - amount)
@@ -406,6 +541,8 @@ class Ship:
         self.hp = self.hull.hp
         self.armor = self.armor_max
         self.subsystems = {k: 1.0 for k in SUBSYSTEMS}
+        self.fires = self.leaks = 0
+        self.water = 0.0
 
     def recharge(self):
         self.shield = self.shield_max

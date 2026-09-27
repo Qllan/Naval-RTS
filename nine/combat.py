@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 from pygame.math import Vector2
 
-from .ship import heading, norm_angle
+from .modules import AMMO
+from .ship import HEAT_MAX, heading, norm_angle
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Projectile:
     turn_rate: float = 0.0
     speed: float = 0.0
     lost: bool = False            # ракета потеряла цель
+    ammo: str = "std"             # тип снаряда для пушек
 
     @property
     def side(self):
@@ -37,17 +39,24 @@ def lead_point(shooter_pos, target, projectile_speed, noise=None):
     return aim
 
 
-def spread_for(defn, density, accuracy_bonus=0.0, smoke=False):
-    s = defn.spread * (1.0 + 1.5 * density) - 3.0 * accuracy_bonus
+def spread_for(defn, density, accuracy_bonus=0.0, smoke=False, list_angle=0.0):
+    s = defn.spread * (1.0 + 1.5 * density) - 3.0 * accuracy_bonus + list_angle * 0.5
     if smoke:
         s += 10.0
     return max(0.0, s)
 
 
-def try_fire(ship, mount, rng, density, aim_point=None, accuracy_bonus=0.0, smoke=False):
+def ammo_for(defn, wanted):
+    """Особые снаряды — только для кинетических пушек."""
+    if defn.kind == "gun" and defn.dmg_type == "kinetic":
+        return wanted
+    return "std"
+
+
+def try_fire(ship, mount, rng, density, aim_point=None, accuracy_bonus=0.0, smoke=False, ammo="std"):
     """Выстрел из установки, если она готова. Возвращает список снарядов (может быть пустым)."""
     d = mount.defn
-    if mount.reload > 0 or not mount.has_ammo:
+    if mount.reload > 0 or not mount.has_ammo or mount.overheated:
         return []
     if d.shot_energy and ship.capacitor < d.shot_energy:
         return []
@@ -61,7 +70,9 @@ def try_fire(ship, mount, rng, density, aim_point=None, accuracy_bonus=0.0, smok
         base = ship.angle + mount.slot.facing       # пусковые и торпедные аппараты не поворачиваются
 
     out = []
-    spread = spread_for(d, density, accuracy_bonus, smoke) if d.kind == "gun" else 0.0
+    spread = spread_for(d, density, accuracy_bonus, smoke, ship.list_angle) if d.kind == "gun" else 0.0
+    ammo = ammo_for(d, ammo)
+    dtype = AMMO[ammo].dmg_type if ammo != "std" else d.dmg_type
     for _ in range(d.pellets):
         ang = base + (rng.uniform(-spread, spread) if spread else 0.0)
         direction = heading(ang)
@@ -75,8 +86,12 @@ def try_fire(ship, mount, rng, density, aim_point=None, accuracy_bonus=0.0, smok
         else:
             # скорость стрелка не наследуется — иначе упреждение СУО врёт на ходу
             out.append(Projectile(origin + direction * 4, direction * d.speed, d.damage,
-                                  d.dmg_type, ship, "shell", d.range / d.speed))
+                                  dtype, ship, "shell", d.range / d.speed, ammo=ammo))
     mount.reload = d.reload * ship.reload_mult()
+    if d.heat:
+        mount.heat += d.heat
+        if mount.heat >= HEAT_MAX:
+            mount.overheated = True
     if d.ammo:
         mount.ammo -= 1
     ship.capacitor -= d.shot_energy

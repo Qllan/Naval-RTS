@@ -257,16 +257,21 @@ class Renderer:
         screen, self.screen = self.screen, target
         try:
             if ship.throttle > 0.05 and ship.engine:
-                tail = ship.pos - heading(ship.angle) * (ship.radius + 4)
                 flame = (255, 160, 70) if ship.boosting else (120, 180, 220)
-                pygame.draw.circle(self.screen, flame, self.to_screen(tail), 3 + (2 if ship.boosting else 0))
+                offsets = (0,) if ship.engine.size == 1 else (-5, 5)      # у турбин M два выхлопа
+                for off in offsets:
+                    tail = ship.pos + Vector2(-(ship.radius + 4), off).rotate(ship.angle)
+                    pygame.draw.circle(self.screen, flame, self.to_screen(tail), 3 + (2 if ship.boosting else 0))
             if player and ship.fouling > 0.05:
                 f = ship.fouling
                 color = tuple(int(c * (1 - f) + v * f) for c, v in zip(color, (150, 80, 200)))
+            if ship.water > 0.05:
+                # корабль садится в воду: темнеет и «тонет» кормой
+                k = 1.0 - 0.45 * ship.water
+                color = tuple(int(c * k) for c in color)
             self.poly(ship.hull.shape, ship.pos, ship.angle, color)
-            if ship.armor_max and ship.armor > 0:
-                self.poly(ship.hull.shape, ship.pos, ship.angle, (120, 110, 90), width=1)
             dark = tuple(int(c * 0.45) for c in color)
+            self._ship_modules(ship, dark)
             for m in ship.weapons:
                 base = self.to_screen(m.world_pos(ship))
                 barrel = 9 if m.defn.size > 1 else 6
@@ -280,6 +285,12 @@ class Renderer:
                 a = ship.shield / ship.shield_max
                 col = (int(30 + 30 * a), int(60 + 80 * a), int(90 + 110 * a))
                 pygame.draw.circle(self.screen, col, self.to_screen(ship.pos), int(ship.radius + 6), 1)
+            for i in range(ship.fires):
+                flick = (self.frame // 4 + i * 3) % 5
+                off = Vector2(ship.hull.shape[i % len(ship.hull.shape)]) * 0.5
+                fp = self.to_screen(ship.pos + off.rotate(ship.angle))
+                pygame.draw.circle(self.screen, (255, 120 + flick * 20, 40), fp, 2 + flick % 2)
+                pygame.draw.circle(self.screen, (90, 90, 90), fp + Vector2(3, -4 - flick), 2)
             if not player and ship.hp < ship.hull.hp:
                 s = self.to_screen(ship.pos) + Vector2(-14, -ship.radius - 10)
                 pygame.draw.rect(self.screen, (40, 20, 20), (s.x, s.y, 28, 3))
@@ -289,6 +300,35 @@ class Renderer:
         if target is not screen:
             target.set_alpha(alpha)
             screen.blit(target, (0, 0))
+
+    def _ship_modules(self, ship, dark):
+        """Модули видны на корпусе: броня, мачта радара, бур, сборщик, пусковые."""
+        if ship.armor_def and ship.armor > 0:
+            width = 2 if ship.armor_def.size > 1 else 1
+            self.poly(ship.hull.shape, ship.pos, ship.angle, (140, 130, 100), width=width, scale=0.92)
+        if ship.sensor:
+            mast = self.to_screen(ship.pos + Vector2(-4, 0).rotate(ship.angle))
+            r = 3 if ship.sensor.size > 1 else 2
+            pygame.draw.circle(self.screen, dark, mast, r)
+            if ship.sensor.veil_resist:            # сонар — дуга, радар — вращающаяся антенна
+                pygame.draw.circle(self.screen, (110, 170, 180), mast, r + 3, 1)
+            else:
+                sweep = heading(self.frame * 6) * (r + 4)
+                pygame.draw.line(self.screen, (110, 170, 180), mast, mast + sweep, 1)
+        for i, slot, m in ship.modules():
+            if m.category != "utility":
+                continue
+            if m.effect == "drill":
+                bow = ship.pos + Vector2(ship.hull.shape[0]).rotate(ship.angle)
+                tip = bow + heading(ship.angle) * 6
+                pygame.draw.line(self.screen, (170, 160, 130), self.to_screen(bow), self.to_screen(tip), 3)
+            elif m.effect == "collector":
+                for side in (-1, 1):
+                    c = ship.pos + Vector2(0, side * (ship.radius * 0.55)).rotate(ship.angle)
+                    pygame.draw.circle(self.screen, (160, 110, 210), self.to_screen(c), 3, 1)
+            elif m.effect == "cargo":
+                c = ship.pos + Vector2(-ship.radius * 0.5, 0).rotate(ship.angle)
+                pygame.draw.rect(self.screen, dark, (*(self.to_screen(c) - Vector2(3, 3)), 6, 6), 1)
 
     def _projectile(self, pr):
         s = self.to_screen(pr.pos)
@@ -315,6 +355,23 @@ class Renderer:
                                int(r * 0.6))
         self.screen.blit(surf, self.to_screen(sm.pos) - Vector2(r, r))
 
+    def _target_info(self, ship, anchor):
+        """Подсказка по цели: корпус, вооружение, защита — читаемость врага."""
+        weapons = ", ".join(m.defn.name.split("«")[0].strip() if "«" in m.defn.name else m.defn.name
+                            for m in ship.weapons) or "без оружия"
+        lines = [ship.hull.name, weapons,
+                 f"Щит {int(ship.shield)}  Броня {int(ship.armor)}  Корпус {int(ship.hp)}"]
+        if ship.fires or ship.leaks:
+            lines.append(f"Пожары {ship.fires}, течи {ship.leaks}")
+        x, y = anchor
+        width = max(self.font.size(line)[0] for line in lines)
+        if x + width > self.w - 345:              # не заезжать на панель оружия справа
+            x = anchor[0] - width - 2 * (ship.radius + 17)
+        y = min(max(y, 60), self.h - 16 * len(lines) - 10)
+        for i, line in enumerate(lines):
+            img = self.font.render(line, True, (230, 220, 150) if i == 0 else (170, 180, 170))
+            self.screen.blit(img, (x, y + i * 16))
+
     def _lock_marker(self, world):
         gt = world.gun_target
         if gt is not None and not world.in_capsule:
@@ -324,6 +381,7 @@ class Renderer:
             for a in (0, 90, 180, 270):
                 d = heading(a)
                 pygame.draw.line(self.screen, (230, 220, 150), s + d * (r - 3), s + d * (r + 4), 1)
+            self._target_info(gt, s + Vector2(r + 10, -r))
         tgt = world.lock_candidate
         mounts = [m for m in world.player.weapons if m.defn.kind == "missile"]
         if tgt is None or not mounts or world.in_capsule:

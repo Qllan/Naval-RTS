@@ -1,16 +1,16 @@
 """Экран порта: сервис, верфь, оснащение, склад.
 
 Управление: A/D или стрелки — вкладки, W/S или стрелки — выбор, Enter — действие,
-Backspace — снять модуль, Esc — назад / выйти в море.
+Backspace — снять модуль, G — группа огня, Esc — назад / выйти в море.
 """
 
 import pygame
 
 from . import config as C
 from .hulls import PLAYER_HULLS
-from .modules import CATEGORY_NAME, MODULES, SIZE_NAME, WeaponDef, module_stats
+from .modules import AMMO, CATEGORY_NAME, MODULES, SIZE_NAME, WeaponDef, module_stats
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship
-from .world import MODULE_RESALE
+from .world import AMMO_PACK, MODULE_RESALE
 
 UI = (170, 190, 200)
 DIM = (90, 105, 115)
@@ -22,6 +22,7 @@ SEL = (30, 60, 70)
 PANEL = (6, 10, 16, 235)
 
 TABS = ("Сервис", "Верфь", "Оснащение", "Склад")
+GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
 DENSE = 0.8          # «плотная Пелена» для сравнения характеристик
 
 
@@ -72,6 +73,10 @@ class PortUI:
             (f"Продать груз (+{world.cargo_value()} КК)", world.sell_cargo_action),
             (f"Полный ремонт: корпус, броня, подсистемы ({world.repair_cost()} КК)", world.repair),
             (f"Пополнить боезапас и заряды ({world.rearm_cost()} КК)", world.rearm),
+            (f"Бронебойные снаряды ×{AMMO_PACK} ({world.ammo_pack_cost('ap')} КК), на борту "
+             f"{cap.ammo_stock['ap']}", lambda: world.buy_ammo("ap")),
+            (f"Фугасные снаряды ×{AMMO_PACK} ({world.ammo_pack_cost('he')} КК), на борту "
+             f"{cap.ammo_stock['he']}", lambda: world.buy_ammo("he")),
             (f"Очистить налёт филаментов ({C.CLEAN_COST} КК)", world.clean_hull),
             (f"Погасить долг ({cap.debt} КК)" if cap.debt else "Долгов нет", world.pay_debt_action),
             (f"Лечение травмы ({C.MEDICAL_COST} КК)" if cap.trauma else "Капитан здоров", world.heal),
@@ -119,6 +124,12 @@ class PortUI:
         elif key in (pygame.K_BACKSPACE, pygame.K_DELETE) and TABS[self.tab] == "Оснащение" and not self.picker:
             err = world.uninstall(self.sel)
             self.say(err or "Модуль снят и отправлен на склад.", BAD if err else ACCENT)
+        elif key == pygame.K_g and TABS[self.tab] == "Оснащение" and not self.picker:
+            g = world.cycle_group(self.sel)
+            if g is None:
+                self.say("Группа огня — только для оружия.", WARN)
+            else:
+                self.say(f"Группа огня: {GROUP_NAME[g]}", ACCENT)
         return None
 
     def _count(self, world):
@@ -238,7 +249,7 @@ class PortUI:
 
         msg, col = self.message
         self.text(msg, (rect.x + 20, rect.bottom - 48), col)
-        hint = "A/D — вкладки   W/S — выбор   Enter — действие   Backspace — снять модуль   Esc — назад / в море"
+        hint = "A/D — вкладки   W/S — выбор   Enter — действие   Backspace — снять   G — группа огня   Esc — в море"
         self.text(hint, (rect.centerx, rect.bottom - 24), DIM, self.small, center=True)
 
     def _list(self, rows, x, y, width, sel, row_h=24):
@@ -312,10 +323,19 @@ class PortUI:
             key = p.fit[i]
             name = MODULES[key].name if key else "— пусто —"
             label = f"{CATEGORY_NAME[slot.category]} {SIZE_NAME[slot.size]}: {name}"
+            w = next((w for w in p.weapons if w.index == i), None)
+            if w is not None:
+                label += f"  [{GROUP_NAME[w.group]}]"
             rows.append((label, UI if key else DIM))
         self._list(rows, body.x, body.y, 400, -1 if self.picker else self.sel, 22)
         if self.picker:
             pygame.draw.rect(self.screen, (60, 90, 100), (body.x - 6, body.y + self.slot * 22 - 3, 400, 22), 1)
+        else:
+            self.text("G — группа огня выбранного орудия (ЛКМ / ПКМ / выкл.)",
+                      (body.x, body.y + len(rows) * 22 + 12), DIM, self.small)
+            ammo = ", ".join(f"{AMMO[k].name}: {v}" for k, v in world.captain.ammo_stock.items())
+            self.text(f"Особые снаряды на борту — {ammo}", (body.x, body.y + len(rows) * 22 + 30), DIM,
+                      self.small)
 
         x = body.x + 420
         preview = None

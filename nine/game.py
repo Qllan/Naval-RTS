@@ -11,7 +11,8 @@ from .port_ui import PortUI
 from .render import Renderer
 from .world import Controls, World
 
-UTILITY_KEYS = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2}
+UTILITY_KEYS = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2, pygame.K_4: 3}
+PIP_KEYS = {pygame.K_z: "shields", pygame.K_x: "engines", pygame.K_c: "weapons", pygame.K_v: "reset"}
 
 
 class Game:
@@ -30,6 +31,8 @@ class Game:
         self.docked = False
         self.running = True
         self.pending_activate = []
+        self.pending_pips = []
+        self.pending_ammo = False
 
     # --------------------------------------------------------------------
 
@@ -45,6 +48,8 @@ class Game:
         ctl.mine = keys[pygame.K_e]
         ctl.aim = Vector2(pygame.mouse.get_pos()) + self.renderer.cam
         ctl.activate, self.pending_activate = self.pending_activate, []
+        ctl.pips, self.pending_pips = self.pending_pips, []
+        ctl.cycle_ammo, self.pending_ammo = self.pending_ammo, False
         return ctl
 
     def handle_events(self):
@@ -73,6 +78,10 @@ class Game:
                     self.port_ui.reset()
                 elif e.key in UTILITY_KEYS:
                     self.pending_activate.append(UTILITY_KEYS[e.key])
+                elif e.key in PIP_KEYS:
+                    self.pending_pips.append(PIP_KEYS[e.key])
+                elif e.key == pygame.K_t:
+                    self.pending_ammo = True
 
     def step(self, dt):
         if not self.docked:

@@ -4,8 +4,8 @@ import pygame
 
 from . import config as C
 from .entities import RESOURCES
-from .modules import SIZE_NAME
-from .ship import SUBSYSTEM_NAME, SUBSYSTEMS
+from .modules import AMMO, SIZE_NAME
+from .ship import PIP_MAX, PIP_NAME, PIP_SYSTEMS, SUBSYSTEM_NAME, SUBSYSTEMS
 
 UI = (170, 190, 200)
 DIM = (90, 105, 115)
@@ -17,7 +17,8 @@ PANEL = (6, 10, 16, 210)
 HELP_LINES = [
     "W/S — ход вперёд/назад     A/D — руль     Shift — форсаж (тратит энергию)",
     "ЛКМ / Пробел — пушки по курсору     ПКМ (держать на цели) — захват и пуск ракет, торпеды",
-    "1–3 — активные модули     E (держать) — добыча     F — порт     H — справка     Esc — выход",
+    "1–4 — активные модули   Z/X/C — энергия в щиты/двигатель/орудия, V — поровну   T — тип снарядов",
+    "E (держать) — добыча     F — порт     H — справка     Esc — выход",
     "",
     "Пелена гуще к северо-востоку, у Ока Девятки. Там дороже ресурсы и слабее сенсоры.",
     "Электроника в Пелене ест больше энергии: если реактор не тянет — гаснут щиты и радар.",
@@ -101,6 +102,14 @@ class Hud:
         cargo = f"Трюм: {int(world.cargo_used)}/{world.cargo_capacity}  (~{world.cargo_value()} КК)"
         self.text(cargo, (22, 182), UI, self.small)
         y = box.bottom + 6
+        dmg = []
+        if p.fires:
+            dmg.append(f"ПОЖАР ×{p.fires}")
+        if p.leaks or p.water > 0.02:
+            dmg.append(f"Течь ×{p.leaks}, вода {int(p.water * 100)}%, крен {p.list_angle:.0f}°")
+        if dmg:
+            self.text("   ".join(dmg), (16, y), BAD if p.fires or p.water > 0.6 else WARN)
+            y += 20
         if cap.debt:
             self.text(f"ДОЛЖНИК: {cap.debt} КК", (16, y), BAD)
             y += 20
@@ -198,34 +207,63 @@ class Hud:
 
     def _weapons(self, world):
         p = world.player
-        rows = len(p.weapons) + len([u for u in p.utilities if u.defn.active])
-        if rows == 0:
+        actives = [u for u in p.utilities if u.defn.active]
+        rows = len(p.weapons) + len(actives)
+        has_guns = any(m.defn.kind == "gun" and m.defn.dmg_type == "kinetic" for m in p.weapons)
+        extra = 1 + (1 if has_guns else 0)       # энергия (+ снаряды)
+        if world.in_capsule:
             return
-        box = pygame.Rect(self.w - 312, self.h - 24 - rows * 20 - 16, 300, rows * 20 + 16)
+        h = (rows + extra) * 20 + 16
+        box = pygame.Rect(self.w - 332, self.h - 24 - h, 320, h)
         self.panel(box)
         y = box.y + 8
+
+        # распределение энергии
+        x = box.x + 10
+        for key, sys_ in zip("ZXC", PIP_SYSTEMS):
+            r = self.text(f"{key} {PIP_NAME[sys_][:4]}", (x, y), DIM, self.small)
+            for i in range(PIP_MAX):
+                col = (230, 210, 90) if i < p.pips[sys_] else (40, 50, 55)
+                pygame.draw.rect(self.screen, col, (r.right + 5 + i * 8, y + 3, 6, 9))
+            x += 102
+        y += 22
+        pygame.draw.line(self.screen, (40, 60, 70), (box.x + 8, y - 4), (box.right - 8, y - 4))
+        if has_guns:
+            ammo = world.ammo_type
+            stock = "" if ammo == "std" else f" ({world.captain.ammo_stock[ammo]})"
+            others = ", ".join(f"{AMMO[k].short} {v}" for k, v in world.captain.ammo_stock.items())
+            self.text(f"[T] Снаряды: {AMMO[ammo].name}{stock}", (box.x + 10, y), UI, self.small)
+            self.text(others, (box.right - 10 - self.small.size(others)[0], y), DIM, self.small)
+            y += 20
+
         for m in p.weapons:
             d = m.defn
-            ready = m.reload <= 0 and m.has_ammo
+            ready = m.reload <= 0 and m.has_ammo and not m.overheated
             col = UI if ready else DIM
+            grp = {1: "Л", 2: "П", 0: "—"}[m.group]
             label = d.name.split("«")[0].strip() if "«" in d.name else d.name
-            label = f"{label} {SIZE_NAME[d.size]}"
-            self.text(label, (box.x + 10, y), col, self.small)
-            frac = 1.0 - (m.reload / (d.reload * p.reload_mult()) if d.reload else 0)
-            pygame.draw.rect(self.screen, (25, 35, 40), (box.x + 170, y + 4, 60, 6))
-            pygame.draw.rect(self.screen, ACCENT if ready else DIM, (box.x + 170, y + 4, int(60 * frac), 6))
+            self.text(f"{grp}  {label} {SIZE_NAME[d.size]}", (box.x + 10, y), col, self.small)
+            bx = box.x + 180
+            if m.overheated:
+                pygame.draw.rect(self.screen, BAD, (bx, y + 4, int(60 * m.heat / 100), 6))
+            else:
+                frac = 1.0 - (m.reload / (d.reload * p.reload_mult()) if d.reload else 0)
+                pygame.draw.rect(self.screen, (25, 35, 40), (bx, y + 4, 60, 6))
+                pygame.draw.rect(self.screen, ACCENT if ready else DIM, (bx, y + 4, int(60 * max(0, frac)), 6))
+                if m.heat > 1:
+                    hc = WARN if m.heat > 60 else (120, 110, 80)
+                    pygame.draw.rect(self.screen, hc, (bx, y + 11, int(60 * m.heat / 100), 2))
             info = ""
-            if d.ammo:
+            if m.overheated:
+                info = "ПЕРЕГРЕВ"
+            elif d.ammo:
                 info = f"{m.ammo}/{d.ammo}"
             if d.kind == "missile" and m.lock > 0:
-                info += f" захват {int(m.lock * 100)}%"
-            self.text(info, (box.x + 238, y), WARN if d.ammo and m.ammo == 0 else DIM, self.small)
+                info += f" {int(m.lock * 100)}%"
+            self.text(info, (box.x + 248, y), BAD if m.overheated or (d.ammo and m.ammo == 0) else DIM,
+                      self.small)
             y += 20
-        n = 0
-        for u in p.utilities:
-            if not u.defn.active:
-                continue
-            n += 1
+        for n, u in enumerate(actives, 1):
             if u.active_time > 0:
                 state, col = f"активен {u.active_time:.0f} с", ACCENT
             elif u.cooldown > 0:
@@ -236,5 +274,5 @@ class Hud:
                 state, col = "готов", UI
             charges = f" ×{u.charges}" if u.defn.charges else ""
             self.text(f"[{n}] {u.defn.name}{charges}", (box.x + 10, y), col, self.small)
-            self.text(state, (box.x + 238, y), col, self.small)
+            self.text(state, (box.x + 248, y), col, self.small)
             y += 20

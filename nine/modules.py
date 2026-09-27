@@ -55,6 +55,7 @@ class WeaponDef(ModuleDef):
     lock_time: float = 0.0       # ракеты: время захвата цели
     turn_rate: float = 0.0       # ракеты: манёвренность, град/с
     shot_energy: float = 0.0
+    heat: float = 0.0            # нагрев за выстрел; при 100 — перегрев до остывания
 
 
 @dataclass(frozen=True)
@@ -104,20 +105,20 @@ class UtilityDef(ModuleDef):
 _ALL = [
     # --- оружие -----------------------------------------------------------
     WeaponDef("autocannon_s", "Автопушка «Шквал»", "weapon", S, 150, 8, kind="gun", damage=6, reload=0.2,
-              speed=680, range=560, spread=2, traverse=220, arc=300, shot_energy=0.4,
+              speed=680, range=560, spread=2, traverse=220, arc=300, shot_energy=0.4, heat=6,
               desc="Скорострельная, быстрая турель. Слаба против брони."),
     WeaponDef("scatter_s", "Картечница «Ёрш»", "weapon", S, 220, 9, kind="gun", damage=4, pellets=7, reload=0.9,
-              speed=560, range=300, spread=13, traverse=170, arc=300, shot_energy=0.8,
+              speed=560, range=300, spread=13, traverse=170, arc=300, shot_energy=0.8, heat=14,
               desc="Веер картечи в упор. Хороша против лёгких рейдеров."),
     WeaponDef("missile_s", "Ракетная кассета «Оса»", "weapon", S, 380, 10, kind="missile", damage=24,
               dmg_type="explosive", reload=1.4, speed=330, range=1150, traverse=0, arc=360, ammo=12, ammo_price=12,
               lock_time=1.4, turn_rate=160, electronic=True, upkeep=0.5,
               desc="Самонаведение. Нужен захват цели на радаре; Пелена сбивает наведение."),
     WeaponDef("cannon_m", "Тяжёлое орудие «Молот»", "weapon", M, 650, 30, kind="gun", damage=30, reload=1.3,
-              speed=780, range=820, spread=1.5, traverse=70, arc=240, shot_energy=3,
+              speed=780, range=820, spread=1.5, traverse=70, arc=240, shot_energy=3, heat=20,
               desc="Медленная турель, большой урон, пробивает броню."),
     WeaponDef("em_m", "ЭМ-разрядник «Гроза»", "weapon", M, 750, 18, kind="gun", damage=13, dmg_type="em", reload=0.55,
-              speed=950, range=340, spread=2, traverse=150, arc=240, shot_energy=4, upkeep=1, electronic=True,
+              speed=950, range=340, spread=2, traverse=150, arc=240, shot_energy=4, heat=12, upkeep=1, electronic=True,
               desc="Выжигает щиты и подсистемы. По корпусу почти не бьёт."),
     WeaponDef("missile_m", "Ракетный комплекс «Гарпун»", "weapon", M, 950, 24, kind="missile", damage=42,
               dmg_type="explosive", reload=2.4, speed=300, range=1450, traverse=0, arc=360, ammo=10, ammo_price=25,
@@ -176,6 +177,8 @@ _ALL = [
                cooldown=14, energy=30, value=550, desc="Срывает захват и сбивает ракеты рядом с вами."),
     UtilityDef("bioscreen", "Био-экран", "utility", M, 2200, 12, effect="bioscreen", active=True,
                cooldown=45, energy=50, duration=7, desc="Экранирование как у Тиходонта. Вас не видят."),
+    UtilityDef("damage_control", "Аварийная партия", "utility", S, 400, 6, effect="damage_control", active=True,
+               cooldown=25, energy=5, value=2, desc="Тушит пожары и заделывает до двух течей."),
     UtilityDef("cargo_ext", "Расширитель трюма", "utility", S, 300, 10, effect="cargo", value=20,
                desc="+20 к трюму. Добавляет массу."),
     UtilityDef("drill", "Бур «Керн»", "utility", M, 500, 18, effect="drill", value=1.8, upkeep=1,
@@ -185,6 +188,34 @@ _ALL = [
 ]
 
 MODULES = {m.key: m for m in _ALL}
+
+
+@dataclass(frozen=True)
+class AmmoDef:
+    """Снаряды для кинетических пушек. Множители — к урону по каждому слою защиты."""
+    key: str
+    name: str
+    short: str
+    price: int                   # КК за снаряд (картечь — за каждую дробину)
+    dmg_type: str = "kinetic"
+    shield_mult: float = 1.0
+    armor_mult: float = 1.0
+    hull_mult: float = 1.0
+    pierce: bool = False         # игнорирует плоское снижение брони
+    fire_chance: float = 0.0     # шанс поджечь при уроне по корпусу
+    sub_bonus: float = 0.0       # доп. шанс задеть подсистему
+    desc: str = ""
+
+
+AMMO = {
+    "std": AmmoDef("std", "Стандартные", "СТД", 0, desc="Бесконечный запас."),
+    "ap": AmmoDef("ap", "Бронебойные", "ББ", 1, shield_mult=0.7, armor_mult=1.4, pierce=True, sub_bonus=0.05,
+                  desc="Пробивают броню, хуже по щитам."),
+    "he": AmmoDef("he", "Фугасные", "ФУГ", 1, dmg_type="explosive", shield_mult=0.8, armor_mult=0.9,
+                  hull_mult=1.25, fire_chance=0.2, sub_bonus=0.1,
+                  desc="Рвут корпус, поджигают, калечат подсистемы. Слабы по щитам."),
+}
+AMMO_ORDER = ("std", "ap", "he")
 
 
 def module_stats(m):
@@ -198,6 +229,8 @@ def module_stats(m):
             out.append(f"Боезапас {m.ammo} (по {m.ammo_price} КК)")
         if m.lock_time:
             out.append(f"Захват цели {m.lock_time:g} с")
+        if m.heat:
+            out.append(f"Нагрев {m.heat:g} за выстрел (перегрев на 100)")
     elif isinstance(m, EngineDef):
         out.append(f"Тяга {m.thrust:g}, скорость {m.top_speed:g}")
         out.append(f"Форсаж ×{m.boost_mult:g}, {m.boost_drain:g} эн/с")
