@@ -249,5 +249,7 @@ def test_every_hull_renders_its_modules(hull):
     fit = list(Ship(hull, (0, 0)).fit)
     s = Ship(hull, (0, 0), fit=fit)
     s.fires, s.water, s.throttle = 2, 0.5, 1.0
-    r._ship(s, (200, 200, 200))
+    s.hp = s.hull.hp * 0.2
+    for pal in ("player", "pirate"):
+        r.art.draw(screen, r.cam, s, pal, 1.0, alpha=120)
     r._target_info(s, (10, 10))

@@ -9,6 +9,8 @@
 import math
 import random
 
+import numpy as np
+
 from pygame.math import Vector2
 
 from . import config as C
@@ -52,6 +54,7 @@ class Veil:
             [self._static_density(cx * C.VEIL_CELL, cy * C.VEIL_CELL) for cx in range(self.cols)]
             for cy in range(self.rows)
         ]
+        self.np_grid = np.array(self.grid, dtype=np.float64)
         # Внешний источник модификаторов (EventDirector); подключается миром
         self.events = None
 
@@ -99,6 +102,27 @@ class Veil:
         if self.events is not None:
             d += self.events.modifier("density", pos, t)
         return min(1.0, max(0.0, d))
+
+    def density_grid(self, xs, ys, t):
+        """Та же плотность, что и density(), но сразу для сетки точек (numpy).
+
+        xs, ys — одномерные массивы координат; результат имеет форму (len(ys), len(xs)).
+        """
+        X, Y = np.meshgrid(np.asarray(xs, dtype=np.float64), np.asarray(ys, dtype=np.float64))
+        gx = np.clip(X / C.VEIL_CELL, 0.0, self.cols - 1.001)
+        gy = np.clip(Y / C.VEIL_CELL, 0.0, self.rows - 1.001)
+        ix, iy = gx.astype(np.int64), gy.astype(np.int64)
+        fx, fy = gx - ix, gy - iy
+        g = self.np_grid
+        top = g[iy, ix] + (g[iy, ix + 1] - g[iy, ix]) * fx
+        bot = g[iy + 1, ix] + (g[iy + 1, ix + 1] - g[iy + 1, ix]) * fx
+        d = top + (bot - top) * fy
+        dist = np.hypot(X - self.eye.x, Y - self.eye.y)
+        cur = 0.08 * np.sin(X * 0.0021 + t * 0.25) * np.cos(Y * 0.0017 - t * 0.18)
+        d = d + np.where(dist >= C.EYE_CALM_R, cur, 0.0)
+        if self.events is not None:
+            d = d + self.events.modifier_grid("density", X, Y, t)
+        return np.clip(d, 0.0, 1.0)
 
     # --- зоны -------------------------------------------------------------
 

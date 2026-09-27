@@ -3,9 +3,9 @@
 import time
 
 import pygame
-from pygame.math import Vector2
 
 from . import config as C
+from .gfx import ui
 from .hud import Hud
 from .port_ui import PortUI
 from .render import Renderer
@@ -22,6 +22,7 @@ class Game:
             pygame.font.init()
             screen = pygame.display.set_mode((C.SCREEN_W, C.SCREEN_H))
             pygame.display.set_caption("Девятка — прототип")
+        ui.Fonts.reset()
         self.screen = screen
         self.clock = pygame.time.Clock()
         self.world = World(seed)
@@ -46,7 +47,7 @@ class Game:
         ctl.fire = mouse[0] or keys[pygame.K_SPACE]
         ctl.fire2 = mouse[2]
         ctl.mine = keys[pygame.K_e]
-        ctl.aim = Vector2(pygame.mouse.get_pos()) + self.renderer.cam
+        ctl.aim = self.renderer.s2w(pygame.mouse.get_pos())
         ctl.activate, self.pending_activate = self.pending_activate, []
         ctl.pips, self.pending_pips = self.pending_pips, []
         ctl.cycle_ammo, self.pending_ammo = self.pending_ammo, False
@@ -56,6 +57,8 @@ class Game:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 self.running = False
+            elif e.type == pygame.MOUSEWHEEL and not self.docked:
+                self.renderer.cam.zoom_by(e.y)
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_F12:
                     path = f"screenshot_{int(time.time())}.png"

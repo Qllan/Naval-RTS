@@ -7,19 +7,15 @@ Backspace — снять модуль, G — группа огня, Esc — на
 import pygame
 
 from . import config as C
+from .gfx import ui
+from .gfx.ship_art import ShipArt
 from .hulls import PLAYER_HULLS
 from .modules import AMMO, CATEGORY_NAME, MODULES, SIZE_NAME, WeaponDef, module_stats
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship
 from .world import AMMO_PACK, MODULE_RESALE
 
-UI = (170, 190, 200)
-DIM = (90, 105, 115)
-ACCENT = (110, 200, 190)
-WARN = (240, 150, 80)
-BAD = (230, 80, 70)
-GOOD = (120, 210, 120)
-SEL = (30, 60, 70)
-PANEL = (6, 10, 16, 235)
+UI, DIM, ACCENT, WARN, BAD, GOOD = ui.TEXT, ui.DIM, ui.ACCENT, ui.WARN, ui.BAD, ui.GOOD
+TAB_ICON = ("utility", "hull", "gun", "cargo")
 
 TABS = ("Сервис", "Верфь", "Оснащение", "Склад")
 GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
@@ -52,6 +48,7 @@ class PortUI:
     def __init__(self, screen):
         self.screen = screen
         self.w, self.h = screen.get_size()
+        self.art = ShipArt()
         self.font = pygame.font.Font(None, 22)
         self.small = pygame.font.Font(None, 18)
         self.big = pygame.font.Font(None, 32)
@@ -217,26 +214,36 @@ class PortUI:
         return y
 
     def draw(self, world):
-        w, h = 1060, 620
+        w, h = 1080, 640
         rect = pygame.Rect((self.w - w) // 2, (self.h - h) // 2, w, h)
-        surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-        surf.fill(PANEL)
-        self.screen.blit(surf, rect.topleft)
-        pygame.draw.rect(self.screen, (40, 60, 70), rect, 1)
+        dim = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 110))
+        self.screen.blit(dim, (0, 0))
+        ui.panel(self.screen, rect, None, ACCENT, bg=(5, 9, 14, 236))
 
-        self.text("ПОРТ БЕЖЕНЦЕВ", (rect.x + 20, rect.y + 14), ACCENT, self.big)
+        ui.text(self.screen, "ПОРТ БЕЖЕНЦЕВ", (rect.x + 22, rect.y + 16), ACCENT, 30, True)
+        ui.text(self.screen, "нейтральный хаб · Гильдия «Горизонт»", (rect.x + 24, rect.y + 44), DIM, 15)
         cap = world.captain
-        money = f"Кредиты: {cap.credits} КК" + (f"   Долг: {cap.debt}" if cap.debt else "")
-        self.text(money, (rect.right - 20, rect.y + 18), BAD if cap.debt else UI, right=True)
-        x = rect.x + 20
+        ui.icon(self.screen, "credits", (rect.right - 190, rect.y + 27), 16, ui.C_ENERGY)
+        ui.text(self.screen, f"{cap.credits} КК", (rect.right - 176, rect.y + 18), UI, 22, True)
+        if cap.debt:
+            ui.chip(self.screen, f"ДОЛГ {cap.debt}", (rect.right - 22, rect.y + 44), BAD, 15, anchor="topright")
+        x = rect.x + 22
+        ty = rect.y + 70
         for i, name in enumerate(TABS):
-            col = ACCENT if i == self.tab else DIM
-            r = self.text(f"  {name}  ", (x, rect.y + 52), col)
-            if i == self.tab:
-                pygame.draw.line(self.screen, ACCENT, r.bottomleft, r.bottomright, 2)
-            x = r.right + 12
+            active = i == self.tab
+            col = ACCENT if active else DIM
+            tw = ui.text_width(name.upper(), 17, True) + 40
+            tr = pygame.Rect(x, ty, tw, 28)
+            if active:
+                pygame.draw.rect(self.screen, ui.SEL_BG, tr)
+                pygame.draw.line(self.screen, ACCENT, tr.bottomleft, tr.bottomright, 2)
+            ui.icon(self.screen, TAB_ICON[i], (tr.x + 14, tr.centery), 13, col)
+            ui.text(self.screen, name.upper(), (tr.x + 26, tr.centery), col, 17, True, anchor="midleft")
+            x = tr.right + 6
+        pygame.draw.line(self.screen, ui.LINE, (rect.x + 16, ty + 29), (rect.right - 16, ty + 29))
 
-        body = pygame.Rect(rect.x + 20, rect.y + 86, rect.w - 40, rect.h - 140)
+        body = pygame.Rect(rect.x + 24, rect.y + 116, rect.w - 48, rect.h - 170)
         tab = TABS[self.tab]
         if tab == "Сервис":
             self._service(world, body)
@@ -248,15 +255,34 @@ class PortUI:
             self._storage(world, body)
 
         msg, col = self.message
-        self.text(msg, (rect.x + 20, rect.bottom - 48), col)
-        hint = "A/D — вкладки   W/S — выбор   Enter — действие   Backspace — снять   G — группа огня   Esc — в море"
-        self.text(hint, (rect.centerx, rect.bottom - 24), DIM, self.small, center=True)
+        if msg:
+            pygame.draw.line(self.screen, col, (rect.x + 22, rect.bottom - 50), (rect.x + 22, rect.bottom - 34), 2)
+            ui.text(self.screen, msg, (rect.x + 30, rect.bottom - 50), col, 18)
+        pygame.draw.line(self.screen, ui.LINE, (rect.x + 16, rect.bottom - 28), (rect.right - 16, rect.bottom - 28))
+        x = rect.x + 22
+        for key, label in (("A/D", "вкладки"), ("W/S", "выбор"), ("Enter", "действие"), ("Backspace", "снять"),
+                           ("G", "группа огня"), ("Esc", "в море")):
+            r = ui.chip(self.screen, key, (x, rect.bottom - 22), DIM, 14)
+            r = ui.text(self.screen, label, (r.right + 6, rect.bottom - 22), DIM, 15)
+            x = r.right + 18
 
     def _list(self, rows, x, y, width, sel, row_h=24):
-        for i, (label, col) in enumerate(rows):
+        """Строки (подпись, цвет[, иконка]). Иконка — вид из gfx.ui.icon."""
+        for i, row in enumerate(rows):
+            label, col = row[0], row[1]
+            kind = row[2] if len(row) > 2 else None
             if i == sel:
-                pygame.draw.rect(self.screen, SEL, (x - 6, y + i * row_h - 3, width, row_h))
-            self.text(label, (x, y + i * row_h), col)
+                ui.selection(self.screen, (x - 8, y + i * row_h - 4, width, row_h))
+            tx = x
+            if kind:
+                ui.icon(self.screen, kind, (x + 7, y + i * row_h + 7), 13, col)
+                tx = x + 20
+            limit = width - (tx - x) - 4
+            if self.font.size(label)[0] > limit:
+                while label and self.font.size(label + "…")[0] > limit:
+                    label = label[:-1]
+                label += "…"
+            self.text(label, (tx, y + i * row_h), col)
 
     def _stats(self, world, x, y, preview=None):
         """Сводка корабля; с `preview` — сравнение «было > станет»."""
@@ -299,9 +325,13 @@ class PortUI:
             full, cost = world.hull_offer(h.key)
             mark = "  (ваш)" if h.key == world.player.hull.key else ""
             rows.append((f"{h.name:<18} {cost:>6} КК{mark}", ACCENT if mark else UI))
-        self._list(rows, body.x, body.y, 360, self.sel)
+        self._list(rows, body.x, body.y, 360, self.sel, 26)
         h = PLAYER_HULLS[self.sel]
         full, cost = world.hull_offer(h.key)
+        # витрина: корабль с базовым оснащением, носом вверх
+        show = pygame.Rect(body.x - 8, body.y + len(rows) * 26 + 12, 360, body.bottom - body.y - len(rows) * 26 - 12)
+        ui.panel(self.screen, show, "Витрина", ui.LINE, bg=(8, 18, 28, 255))
+        self._showcase(Ship(h.key, (0, 0), -90), show, world.t)
         x, y = body.x + 390, body.y
         self.text(h.name, (x, y), ACCENT, self.big)
         self.text(h.role, (x, y + 30), DIM)
@@ -316,6 +346,20 @@ class PortUI:
         preview = Ship(h.key, (0, 0))
         self._stats(world, x, y + 128, preview)
 
+    def _showcase(self, ship, rect, t):
+        from .gfx.camera import Camera
+        from .gfx.ship_art import hull_length
+        zoom = min(4.2, (rect.h - 50) / hull_length(ship.hull.key))
+        cam = Camera(self.w, self.h, zoom)
+        target = pygame.Vector2(rect.centerx, rect.centery + 10)
+        cam.center = pygame.Vector2((self.w / 2 - target.x) / zoom, (self.h / 2 - target.y) / zoom)
+        for w in ship.weapons:
+            w.rel = 25 * pygame.math.Vector2(1, 0).rotate(t * 40 + w.index * 70).y
+        clip = self.screen.get_clip()
+        self.screen.set_clip(rect.inflate(-4, -4))
+        self.art.draw(self.screen, cam, ship, "player", t)
+        self.screen.set_clip(clip)
+
     def _fitting(self, world, body):
         p = world.player
         rows = []
@@ -326,7 +370,8 @@ class PortUI:
             w = next((w for w in p.weapons if w.index == i), None)
             if w is not None:
                 label += f"  [{GROUP_NAME[w.group]}]"
-            rows.append((label, UI if key else DIM))
+            rows.append((label, UI if key else DIM, ui.MODULE_ICON[slot.category] if not key
+                         else ui.module_icon_kind(MODULES[key])))
         self._list(rows, body.x, body.y, 400, -1 if self.picker else self.sel, 22)
         if self.picker:
             pygame.draw.rect(self.screen, (60, 90, 100), (body.x - 6, body.y + self.slot * 22 - 3, 400, 22), 1)
@@ -346,10 +391,18 @@ class PortUI:
                 m = MODULES[key]
                 tag = "склад" if src == "storage" else f"{m.price} КК"
                 cur = " (стоит)" if p.fit[self.slot] == key and src == "shop" else ""
-                prow.append((f"{m.name} [{SIZE_NAME[m.size]}] — {tag}{cur}", ACCENT if src == "storage" else UI))
+                prow.append((f"{m.name} [{SIZE_NAME[m.size]}] — {tag}{cur}", ACCENT if src == "storage" else UI,
+                             ui.module_icon_kind(m)))
             self.text(f"Выбор модуля ({CATEGORY_NAME[p.hull.slots[self.slot].category]})", (x, body.y - 2), DIM,
                       self.small)
-            self._list(prow[:12], x, body.y + 18, 330, self.pick_sel if self.pick_sel < 12 else -1, 22)
+            visible = 12
+            first = max(0, min(self.pick_sel - visible + 1, len(prow) - visible))      # прокрутка
+            self._list(prow[first:first + visible], x, body.y + 18, 330, self.pick_sel - first, 22)
+            if first > 0:
+                ui.text(self.screen, "▲", (x + 322, body.y + 4), DIM, 14)
+            if first + visible < len(prow):
+                ui.text(self.screen, f"ещё {len(prow) - first - visible} ▼", (x + 330, body.y + 18 + visible * 22),
+                        DIM, 14, anchor="topright")
             if items:
                 key = items[min(self.pick_sel, len(items) - 1)][1]
                 m = MODULES[key]
@@ -382,7 +435,7 @@ class PortUI:
             self.text("Склад пуст. Сюда попадают снятые модули и трофеи.", (body.x, body.y), DIM)
             return
         rows = [(f"{MODULES[k].name} [{SIZE_NAME[MODULES[k].size]}] — продать за "
-                 f"{int(MODULES[k].price * MODULE_RESALE)} КК", UI) for k in storage]
+                 f"{int(MODULES[k].price * MODULE_RESALE)} КК", UI, ui.module_icon_kind(MODULES[k])) for k in storage]
         self._list(rows, body.x, body.y, 560, self.sel)
         key = storage[min(self.sel, len(storage) - 1)]
         x = body.x + 600

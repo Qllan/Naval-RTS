@@ -7,6 +7,7 @@
 import random
 from dataclasses import dataclass, field
 
+import numpy as np
 from pygame.math import Vector2
 
 
@@ -80,6 +81,16 @@ class ActiveEvent:
         temporal = min(1.0, age / 3.0, left / 3.0)
         return spatial * temporal
 
+    def strength_grid(self, X, Y, t):
+        """strength() для массивов координат (numpy)."""
+        if self.phase(t) != "active":
+            return 0.0
+        dist = np.hypot(X - self.pos.x, Y - self.pos.y)
+        spatial = np.clip((1.0 - dist / self.data.radius) / 0.25, 0.0, 1.0)
+        age = t - self.start
+        left = self.start + self.data.duration - t
+        return spatial * min(1.0, age / 3.0, left / 3.0)
+
     def covers(self, pos):
         return self.pos.distance_to(pos) < self.data.radius
 
@@ -129,6 +140,14 @@ class EventDirector:
             for m in e.data.modifiers:
                 if m.kind == kind:
                     total += m.value * s
+        return total
+
+    def modifier_grid(self, kind, X, Y, t):
+        total = 0.0
+        for e in self.active:
+            for m in e.data.modifiers:
+                if m.kind == kind:
+                    total = total + m.value * e.strength_grid(X, Y, t)
         return total
 
     def multiplier(self, kind, pos, t):

@@ -80,6 +80,8 @@ class World:
         self.nodes: list[ResourceNode] = []
         self.loot: list[Loot] = []
         self.log: deque = deque(maxlen=7)
+        # События для визуальных эффектов (выстрелы, попадания, взрывы); их забирает отрисовка
+        self.fx: deque = deque(maxlen=600)
         self.pirate_spawn_cd = 10.0
 
         for _ in range(280):
@@ -94,6 +96,17 @@ class World:
 
     def say(self, text):
         self.log.append((text, self.t))
+
+    def emit(self, *event):
+        self.fx.append(event)
+
+    def _fire(self, ship, mount, *args, **kwargs):
+        """try_fire + событие вспышки для эффектов."""
+        shots = try_fire(ship, mount, *args, **kwargs)
+        if shots:
+            ang = Vector2(1, 0).angle_to(shots[0].vel) if shots[0].vel.length_squared() else ship.angle
+            self.emit("muzzle", Vector2(shots[0].pos), ang, mount.defn.size, mount.defn.kind, ship.side)
+        return shots
 
     def density_at(self, pos):
         return self.veil.density(pos, self.t)
@@ -241,6 +254,7 @@ class World:
                 p.shield = 0.0
                 p.capacitor *= 0.3
                 self.say("ЭМ-вспышка! Электроника отключена.")
+                self.emit("lightning", Vector2(p.pos))
 
     # --- оружие игрока ----------------------------------------------------
 
@@ -274,7 +288,7 @@ class World:
                 point = lead_point(m.world_pos(p), self.gun_target, m.defn.speed, noise) if self.gun_target else aim
                 aimed = m.aim(p, point, dt)
                 if held and aimed:
-                    shots = try_fire(p, m, self.rng, density, point, acc, ammo=self.ammo_type)
+                    shots = self._fire(p, m, self.rng, density, point, acc, ammo=self.ammo_type)
                     self._spend_ammo(shots)
                     self.projectiles += shots
             elif kind == "missile":
@@ -282,12 +296,12 @@ class World:
                 visible = tgt is not None and tgt.pos.distance_to(p.pos) < m.defn.range
                 update_lock(m, p, tgt, visible, density, dt)
                 if held:
-                    shots = try_fire(p, m, self.rng, density)
+                    shots = self._fire(p, m, self.rng, density)
                     if shots:
                         m.lock = 0.0
                     self.projectiles += shots
             elif kind == "torpedo" and held:
-                self.projectiles += try_fire(p, m, self.rng, density)
+                self.projectiles += self._fire(p, m, self.rng, density)
 
     def cycle_ammo(self):
         """Следующий тип снарядов, на который есть запас."""
@@ -319,6 +333,7 @@ class World:
         if eff == "smoke":
             self.smokes.append(Smoke(Vector2(p.pos), u.defn.value, u.defn.duration))
         elif eff == "ecm":
+            self.emit("ecm", Vector2(p.pos), u.defn.value)
             for pr in self.projectiles:
                 if pr.kind == "missile" and pr.target is p and pr.pos.distance_to(p.pos) < u.defn.value:
                     pr.lost = True
@@ -392,10 +407,10 @@ class World:
                     lead = lead_point(m.world_pos(s), p, m.defn.speed)
                     aimed = m.aim(s, lead, dt)
                     if engaged and aimed and dist < m.defn.range * 0.95:
-                        self.projectiles += try_fire(s, m, self.rng, d, lead, 0.0, smoke)
+                        self.projectiles += self._fire(s, m, self.rng, d, lead, 0.0, smoke)
                 elif m.defn.kind == "missile":
                     update_lock(m, s, p if engaged else None, dist < m.defn.range, d, dt)
-                    shots = try_fire(s, m, self.rng, d)
+                    shots = self._fire(s, m, self.rng, d)
                     if shots:
                         m.lock = 0.0
                         self.say("Ракета! Захват на вас.")
@@ -432,7 +447,12 @@ class World:
                     break
             if hit is not None:
                 fires, leaks = hit.fires, hit.leaks
+                armor, hp = hit.armor, hit.hp
                 sub = hit.apply_damage(pr.damage, pr.dtype, self.rng, pr.ammo)
+                layer = "hull" if hit.hp < hp else "armor" if hit.armor < armor else "shield"
+                self.emit("hit", Vector2(pr.pos), layer, pr.dtype, pr.kind, hit)
+                if pr.kind != "shell":
+                    self.emit("explosion", Vector2(pr.pos), 2 if pr.kind == "torpedo" else 1)
                 if hit is p:
                     if sub:
                         self.say(f"Повреждение: {SUBSYSTEM_NAME[sub]}")
@@ -443,11 +463,16 @@ class World:
                 continue
             if pr.life > 0:
                 keep.append(pr)
+            elif pr.kind == "missile":
+                self.emit("explosion", Vector2(pr.pos), 1)      # самоликвидация
+            else:
+                self.emit("splash", Vector2(pr.pos), pr.kind)
         self.projectiles = keep
 
         for pi in [pi for pi in self.pirates if not pi.ship.alive]:
             self.pirates.remove(pi)
             self.captain.kills += 1
+            self.emit("explosion", Vector2(pi.ship.pos), 3)
             kind = self.rng.choice(["salt", "condensate", "condensate", "filament"])
             loot = Loot(Vector2(pi.ship.pos), {kind: self.rng.randint(3, 8)}, self.rng.randint(40, 90))
             mods = [k for k in pi.ship.fit if k]
@@ -486,6 +511,7 @@ class World:
     def _on_player_destroyed(self):
         cap = self.captain
         pos = Vector2(self.player.pos)
+        self.emit("explosion", pos, 3 if not self.in_capsule else 1)
         if self.in_capsule:
             cap.debt += C.CAPSULE_DEBT
             cap.trauma = True

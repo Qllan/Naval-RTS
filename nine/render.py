@@ -1,57 +1,55 @@
-"""Отрисовка мира. Геометрия полигонами — никаких повёрнутых спрайтов."""
+"""Отрисовка мира: собирает слои из nine/gfx в кадр.
+
+Порядок слоёв: вода → Око (низ) → порт → следы на воде → ресурсы, лут, фауна →
+корабли → снаряды → эффекты в воздухе → дымовые завесы → Пелена → рукава шторма →
+погода → туман войны → прицельные маркеры.
+"""
 
 import math
 
 import pygame
 from pygame.math import Vector2
 
-from . import config as C
-from .entities import RESOURCES
+from .gfx import objects as O
+from .gfx import palette as P
+from .gfx.camera import Camera
+from .gfx.fx import FX
+from .gfx.ocean import FogOfWar, Ocean
+from .gfx.ship_art import ShipArt
 from .ship import heading
-from .ai import Tihodont
-
-WATER = (7, 13, 22)
-WAVE = (15, 27, 42)
-VEIL_CELL_PX = 24
-
-COL_PLAYER = (205, 215, 225)
-COL_CAPSULE = (240, 150, 60)
-COL_PIRATE = (190, 75, 50)
-COL_PORT = (90, 160, 190)
-COL_LOOT = (230, 190, 90)
 
 
 class Renderer:
     def __init__(self, screen):
         self.screen = screen
         self.w, self.h = screen.get_size()
-        self.cam = Vector2()
-        self.frame = 0
-        cw, ch = self.w // VEIL_CELL_PX + 2, self.h // VEIL_CELL_PX + 2
-        self.veil_small = pygame.Surface((cw, ch), pygame.SRCALPHA)
-        self.veil_big = None
-        self.fog = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
-        self.fog_grad = self._make_fog_gradient(256)
-        self.fog_cache = {}
+        self.cam = Camera(self.w, self.h)
+        self.art = ShipArt()
+        self.fx = FX()
+        self.ocean = Ocean()
+        self.fog = FogOfWar(self.w, self.h)
         self.font = pygame.font.Font(None, 20)
+        self.small = pygame.font.Font(None, 17)
+        self._last_t = None
 
-    def to_screen(self, pos):
-        return Vector2(pos) - self.cam
-
-    def on_screen(self, pos, margin=60):
-        s = self.to_screen(pos)
-        return -margin < s.x < self.w + margin and -margin < s.y < self.h + margin
-
-    def poly(self, shape, pos, angle, color, width=0, scale=1.0):
-        pts = [Vector2(x, y).rotate(angle) * scale + self.to_screen(pos) for x, y in shape]
-        pygame.draw.polygon(self.screen, color, pts, width)
+    def s2w(self, pos):
+        return self.cam.s2w(pos)
 
     # --------------------------------------------------------------------
 
     def draw(self, world):
-        self.frame += 1
         p = world.player
-        self.cam = p.pos - Vector2(self.w / 2, self.h / 2)
+        cam = self.cam
+        if self._last_t is None:
+            cam.snap(p.pos)
+            dt = 1 / 60
+        else:
+            dt = max(0.0, min(0.1, world.t - self._last_t))
+        self._last_t = world.t
+        screen = self.screen
+        t = world.t
+
+        cam.update(dt, p.pos, lead=p.vel * 0.35)
         vis = world.visual_range()
         radar = world.radar_range()
 
@@ -61,299 +59,139 @@ class Renderer:
         def blip(pos):
             return p.pos.distance_to(pos) < radar
 
-        self._water(world.t)
-        self._eye(world)
-        self._port(world)
-        self._events(world, radar)
+        self.fx.consume(world.fx, cam, p)
+        self.fx.ambient(world, cam, dt, lambda pos: cam.visible(pos, 80) and seen(pos))
+        self.fx.update(dt)
+
+        self.ocean.draw_water(screen, cam, t)
+        self.ocean.draw_eye_under(screen, cam, world, self.fx)
+        O.draw_port(screen, cam, world, self.font)
+        self.fx.draw(screen, cam, "water")
 
         for n in world.nodes:
-            if self.on_screen(n.pos) and (seen(n.pos) or blip(n.pos)):
-                self._node(n, world.t)
+            if cam.visible(n.pos) and (seen(n.pos) or blip(n.pos)):
+                O.draw_node(screen, cam, n, t, self.fx)
         for lt in world.loot:
-            if self.on_screen(lt.pos) and (seen(lt.pos) or blip(lt.pos)):
-                s = self.to_screen(lt.pos)
-                pygame.draw.rect(self.screen, COL_LOOT, (s.x - 4, s.y - 4, 8, 8), 1)
+            if cam.visible(lt.pos) and (seen(lt.pos) or blip(lt.pos)):
+                O.draw_loot(screen, cam, lt, t)
         for r in world.rays:
-            if self.on_screen(r.pos) and seen(r.pos):
-                self._ray(r)
+            if cam.visible(r.pos) and seen(r.pos):
+                O.draw_ray(screen, cam, r, t)
         for tx in world.tihodonts:
             # Тиходонты экранированы от радаров — только визуально
-            if self.on_screen(tx.pos, 160) and seen(tx.pos):
-                self._tihodont(tx, world.t)
+            if cam.visible(tx.pos, 200) and seen(tx.pos):
+                O.draw_tihodont(screen, cam, tx, t, self.fx)
+
         for pr in world.pirates:
-            if not self.on_screen(pr.ship.pos):
+            s = pr.ship
+            if not cam.visible(s.pos):
                 continue
-            if seen(pr.ship.pos):
-                self._ship(pr.ship, COL_PIRATE)
-            elif blip(pr.ship.pos):
-                s = self.to_screen(pr.ship.pos)
-                pygame.draw.circle(self.screen, COL_PIRATE, s, 3)
-                pygame.draw.circle(self.screen, COL_PIRATE, s, 9, 1)
-        for sm in world.smokes:
-            if self.on_screen(sm.pos, sm.radius):
-                self._smoke(sm)
+            if seen(s.pos):
+                self.art.draw(screen, cam, s, "pirate", t)
+                self._hp_bar(s)
+            elif blip(s.pos):
+                self._blip(s.pos, t)
+
+        alpha = 90 if p.utility_active("bioscreen") else 255
+        self.art.draw(screen, cam, p, "capsule" if world.in_capsule else "player", t, alpha)
+        self._shield_bubble(p, t)
+
         for pr in world.projectiles:
-            if not self.on_screen(pr.pos):
+            if not cam.visible(pr.pos):
                 continue
             if pr.kind == "torpedo" and pr.side != "player" and p.pos.distance_to(pr.pos) > vis * 0.6:
                 continue          # торпеду под водой видно только вблизи
             self._projectile(pr)
 
-        alpha = 90 if p.utility_active("bioscreen") else 255
-        self._ship(p, COL_CAPSULE if world.in_capsule else COL_PLAYER, player=True, alpha=alpha)
+        self.fx.draw(screen, cam, "air")
+        for sm in world.smokes:
+            if cam.visible(sm.pos, sm.radius):
+                O.draw_smoke_screen(screen, cam, sm, self.fx, t)
 
-        self._veil(world)
-        self._storm_arms(world)
-        self._fog(vis)
+        self.ocean.draw_veil(screen, cam, world)
+        self.ocean.draw_eye_over(screen, cam, world)
+        self.ocean.draw_weather(screen, cam, world, self.fx)
+        self.fog.draw(screen, cam, p.pos, vis)
+        self._event_signatures(world, radar)
         if radar > 0:
-            pygame.draw.circle(self.screen, (40, 90, 80), (self.w // 2, self.h // 2), int(radar), 1)
+            pygame.draw.circle(screen, (40, 90, 80), cam.w2s(p.pos), int(cam.px(radar)), 1)
         self._lock_marker(world)
 
     # --------------------------------------------------------------------
 
-    def _water(self, t):
-        self.screen.fill(WATER)
-        step = 110
-        x0 = int(self.cam.x // step) * step
-        y0 = int(self.cam.y // step) * step
-        for gy in range(y0, int(self.cam.y + self.h) + step, step):
-            for gx in range(x0, int(self.cam.x + self.w) + step, step):
-                phase = math.sin(gx * 0.013 + gy * 0.007 + t * 1.3)
-                s = Vector2(gx, gy) - self.cam + Vector2(phase * 6, 0)
-                pygame.draw.line(self.screen, WAVE, s, s + Vector2(14, 0), 1)
+    def _blip(self, pos, t):
+        s = self.cam.w2s(pos)
+        ph = (t * 1.5) % 1
+        pygame.draw.circle(self.screen, P.TRACER_PIRATE, s, 3)
+        pygame.draw.circle(self.screen, P.mix(P.TRACER_PIRATE, P.OCEAN_DEEP, ph), s, int(6 + 10 * ph), 1)
 
-    def _veil(self, world):
-        # Пересчёт раз в 2 кадра: поле меняется медленно
-        if self.frame % 2 == 1 or self.veil_big is None:
-            surf = self.veil_small
-            cw, ch = surf.get_size()
-            ox = self.cam.x - (self.cam.x % VEIL_CELL_PX)
-            oy = self.cam.y - (self.cam.y % VEIL_CELL_PX)
-            self._veil_origin = Vector2(ox, oy)
-            for cy in range(ch):
-                wy = oy + cy * VEIL_CELL_PX
-                for cx in range(cw):
-                    wx = ox + cx * VEIL_CELL_PX
-                    d = world.veil.density((wx, wy), world.t)
-                    a = int(min(215, 15 + 210 * d ** 1.3))
-                    surf.set_at((cx, cy), (int(60 + 70 * d), int(30 + 20 * d), int(95 + 80 * d), a))
-            self.veil_big = pygame.transform.smoothscale(surf, (cw * VEIL_CELL_PX, ch * VEIL_CELL_PX))
-        self.screen.blit(self.veil_big, self._veil_origin - self.cam)
-
-    FOG_ALPHA = 160
-
-    def _make_fog_gradient(self, n):
-        """Радиальный градиент альфы: прозрачно в центре, FOG_ALPHA к краю."""
-        surf = pygame.Surface((n, n), pygame.SRCALPHA)
-        c = (n - 1) / 2
-        for y in range(n):
-            for x in range(n):
-                r = math.hypot(x - c, y - c) / c
-                k = min(1.0, max(0.0, (r - 0.55) / 0.45))
-                surf.set_at((x, y), (0, 0, 0, int(self.FOG_ALPHA * k * k * (3 - 2 * k))))
-        return surf
-
-    def _fog(self, vis):
-        size = max(8, int(vis * 2) // 8 * 8)
-        grad = self.fog_cache.get(size)
-        if grad is None:
-            if len(self.fog_cache) > 64:
-                self.fog_cache.clear()
-            grad = self.fog_cache[size] = pygame.transform.smoothscale(self.fog_grad, (size, size))
-        self.fog.fill((0, 0, 0, self.FOG_ALPHA))
-        rect = grad.get_rect(center=(self.w // 2, self.h // 2))
-        self.fog.blit(grad, rect, special_flags=pygame.BLEND_RGBA_MIN)
-        self.screen.blit(self.fog, (0, 0))
-
-    def _eye(self, world):
-        eye = world.eye
-        if not self.on_screen(eye, C.EYE_BELT_R):
+    def _hp_bar(self, ship):
+        if ship.hp >= ship.hull.hp and ship.shield >= ship.shield_max:
             return
-        s = self.to_screen(eye)
-        t = world.t
-        # Зеркало — ртутная вода и столб света
-        pygame.draw.circle(self.screen, (2, 2, 4), s, int(C.EYE_CALM_R))
-        pygame.draw.circle(self.screen, (60, 60, 70), s, int(C.EYE_CALM_R), 1)
-        glow = 26 + 6 * math.sin(t * 2)
-        for i in range(4):
-            pygame.draw.circle(self.screen, (60 + i * 50, 60 + i * 50, 70 + i * 50), s, int(glow * (1 - i * 0.22)))
+        cam = self.cam
+        s = cam.w2s(ship.pos) + Vector2(0, -cam.px(ship.radius) - 12)
+        w = max(24, int(cam.px(ship.radius * 1.6)))
+        x = s.x - w / 2
+        pygame.draw.rect(self.screen, (20, 12, 12), (x - 1, s.y - 1, w + 2, 6))
+        pygame.draw.rect(self.screen, (200, 90, 70), (x, s.y + 2, int(w * max(0, ship.hp) / ship.hull.hp), 2))
+        if ship.shield_max:
+            pygame.draw.rect(self.screen, P.SHIELD_HIT, (x, s.y, int(w * ship.shield / ship.shield_max), 2))
 
-    def _storm_arms(self, world):
-        """Стена Рёва — вращающиеся рукава шторма поверх Пелены."""
-        eye = world.eye
-        if not self.on_screen(eye, C.EYE_WALL_R):
+    def _shield_bubble(self, ship, t):
+        if not ship.shield_max or ship.shield < 1:
             return
-        s = self.to_screen(eye)
-        t = world.t
-        for arm in range(6):
-            base = arm * 60 + t * 25
-            pts = []
-            for k in range(20):
-                r = C.EYE_CALM_R + (C.EYE_WALL_R - C.EYE_CALM_R) * k / 19
-                a = math.radians(base + k * 9)
-                pts.append((s.x + math.cos(a) * r, s.y + math.sin(a) * r))
-            pygame.draw.lines(self.screen, (150, 90, 200), False, pts, 2)
+        k = ship.shield / ship.shield_max
+        cam = self.cam
+        r = cam.px(ship.radius + 7)
+        s = cam.w2s(ship.pos)
+        a = int(40 + 25 * math.sin(t * 3)) if k > 0.25 else int(60 * (0.5 + 0.5 * math.sin(t * 14)))
+        layer = pygame.Surface((int(r * 2 + 4), int(r * 2 + 4)), pygame.SRCALPHA)
+        pygame.draw.circle(layer, (*P.SHIELD_HIT, int(a * k + 10)), (r + 2, r + 2), int(r), max(1, int(cam.zoom)))
+        self.screen.blit(layer, layer.get_rect(center=s))
 
-    def _port(self, world):
-        if not self.on_screen(world.port, 200):
-            return
-        s = self.to_screen(world.port)
-        pygame.draw.circle(self.screen, (20, 40, 55), s, int(C.PORT_RADIUS))
-        pygame.draw.circle(self.screen, COL_PORT, s, int(C.PORT_RADIUS), 1)
-        pygame.draw.rect(self.screen, (40, 70, 90), (s.x - 50, s.y - 30, 100, 60))
-        pygame.draw.rect(self.screen, COL_PORT, (s.x - 50, s.y - 30, 100, 60), 1)
-        for i in range(4):
-            on = (int(world.t * 2) + i) % 4 == 0
-            pygame.draw.circle(self.screen, (250, 220, 120) if on else (90, 80, 50), (s.x - 36 + i * 24, s.y - 36), 3)
-        lbl = self.font.render("Порт беженцев", True, COL_PORT)
-        self.screen.blit(lbl, (s.x - lbl.get_width() / 2, s.y + 38))
+    def _projectile(self, pr):
+        cam, screen = self.cam, self.screen
+        s = cam.w2s(pr.pos)
+        d = pr.vel.normalize() if pr.vel.length_squared() else Vector2(1, 0)
+        if pr.kind == "missile":
+            tail = s - d * cam.px(4)
+            pygame.draw.line(screen, (190, 190, 196), s, tail, max(2, int(cam.px(1.4))))
+            img = self.fx.glow((255, 170, 90) if not pr.lost else (140, 110, 90), cam.px(4))
+            screen.blit(img, img.get_rect(center=tail), special_flags=pygame.BLEND_ADD)
+        elif pr.kind == "torpedo":
+            pygame.draw.line(screen, (40, 70, 84), s, s - d * cam.px(9), max(2, int(cam.px(2.2))))
+            pygame.draw.line(screen, (120, 170, 190), s, s - d * cam.px(4), 1)
+        else:
+            col = P.TRACER_PLAYER if pr.side == "player" else P.TRACER_PIRATE
+            if pr.dtype == "em":
+                col = P.TRACER_EM
+            elif pr.ammo == "ap":
+                col = (220, 235, 255)
+            elif pr.ammo == "he":
+                col = (255, 170, 80)
+            length = cam.px(4 + pr.damage * 0.35)
+            pygame.draw.line(screen, col, s, s - d * length, max(1, int(cam.px(0.8 + pr.damage / 30))))
+            img = self.fx.glow(P.shade(col, 0.55), cam.px(3 + pr.damage / 12))
+            screen.blit(img, img.get_rect(center=s), special_flags=pygame.BLEND_ADD)
 
-    def _events(self, world, radar):
+    def _event_signatures(self, world, radar):
+        """Сигнатура активного события видна на сенсорах, но не его тип — пунктирный круг."""
+        cam = self.cam
         for ev in world.events.active:
             if ev.phase(world.t) != "active":
                 continue
-            # Сигнатура видна на радаре, если край события в зоне сенсоров
             if world.player.pos.distance_to(ev.pos) - ev.data.radius > max(radar, world.visual_range()):
                 continue
-            s = self.to_screen(ev.pos)
-            pulse = 1.0 + 0.02 * math.sin(world.t * 3)
-            pygame.draw.circle(self.screen, ev.data.color, s, int(ev.data.radius * pulse), 1)
-
-    def _node(self, n, t):
-        kind = RESOURCES[n.kind]
-        s = self.to_screen(n.pos)
-        r = 5 + int(n.amount / 12)
-        glow = 0.6 + 0.4 * math.sin(t * 2 + n.pos.x)
-        col = tuple(int(c * glow) for c in kind.color)
-        pygame.draw.polygon(self.screen, col, [(s.x, s.y - r), (s.x + r, s.y), (s.x, s.y + r), (s.x - r, s.y)], 1)
-
-    def _ray(self, r):
-        k = 1.0 - r.depth
-        if k <= 0.05:
-            return
-        col = (int(60 + 100 * k), int(120 + 100 * k), int(140 + 90 * k))
-        shape = ((7, 0), (-3, 9), (-6, 0), (-3, -9))
-        self.poly(shape, r.pos, r.angle, tuple(int(c * k) for c in col))
-
-    def _tihodont(self, tx, t):
-        s = self.to_screen(tx.pos)
-        body = (60, 30, 30) if tx.angry else (18, 34, 42)
-        fwd = heading(tx.angle)
-        rect = pygame.Rect(0, 0, Tihodont.RADIUS * 2.2, Tihodont.RADIUS * 1.3)
-        surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.ellipse(surf, (*body, 200), rect)
-        for i in range(7):
-            x = rect.w * (0.2 + 0.1 * i)
-            y = rect.h * (0.5 + 0.25 * math.sin(i * 1.7))
-            a = int(140 + 100 * math.sin(t * 1.5 + i))
-            pygame.draw.circle(surf, (90, 220, 200, max(0, a)), (x, y), 3)
-        rot = pygame.transform.rotate(surf, -Vector2(1, 0).angle_to(fwd))
-        self.screen.blit(rot, rot.get_rect(center=s))
-
-    def _ship(self, ship, color, player=False, alpha=255):
-        target = self.screen
-        if alpha < 255:
-            target = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
-        screen, self.screen = self.screen, target
-        try:
-            if ship.throttle > 0.05 and ship.engine:
-                flame = (255, 160, 70) if ship.boosting else (120, 180, 220)
-                offsets = (0,) if ship.engine.size == 1 else (-5, 5)      # у турбин M два выхлопа
-                for off in offsets:
-                    tail = ship.pos + Vector2(-(ship.radius + 4), off).rotate(ship.angle)
-                    pygame.draw.circle(self.screen, flame, self.to_screen(tail), 3 + (2 if ship.boosting else 0))
-            if player and ship.fouling > 0.05:
-                f = ship.fouling
-                color = tuple(int(c * (1 - f) + v * f) for c, v in zip(color, (150, 80, 200)))
-            if ship.water > 0.05:
-                # корабль садится в воду: темнеет и «тонет» кормой
-                k = 1.0 - 0.45 * ship.water
-                color = tuple(int(c * k) for c in color)
-            self.poly(ship.hull.shape, ship.pos, ship.angle, color)
-            dark = tuple(int(c * 0.45) for c in color)
-            self._ship_modules(ship, dark)
-            for m in ship.weapons:
-                base = self.to_screen(m.world_pos(ship))
-                barrel = 9 if m.defn.size > 1 else 6
-                if m.defn.kind == "gun":
-                    end = base + heading(m.world_angle(ship)) * barrel
-                    pygame.draw.line(self.screen, dark, base, end, 3 if m.defn.size > 1 else 2)
-                    pygame.draw.circle(self.screen, dark, base, 3 if m.defn.size > 1 else 2)
-                else:
-                    pygame.draw.rect(self.screen, dark, (base.x - 3, base.y - 3, 6, 6))
-            if ship.shield > 1 and ship.shield_max:
-                a = ship.shield / ship.shield_max
-                col = (int(30 + 30 * a), int(60 + 80 * a), int(90 + 110 * a))
-                pygame.draw.circle(self.screen, col, self.to_screen(ship.pos), int(ship.radius + 6), 1)
-            for i in range(ship.fires):
-                flick = (self.frame // 4 + i * 3) % 5
-                off = Vector2(ship.hull.shape[i % len(ship.hull.shape)]) * 0.5
-                fp = self.to_screen(ship.pos + off.rotate(ship.angle))
-                pygame.draw.circle(self.screen, (255, 120 + flick * 20, 40), fp, 2 + flick % 2)
-                pygame.draw.circle(self.screen, (90, 90, 90), fp + Vector2(3, -4 - flick), 2)
-            if not player and ship.hp < ship.hull.hp:
-                s = self.to_screen(ship.pos) + Vector2(-14, -ship.radius - 10)
-                pygame.draw.rect(self.screen, (40, 20, 20), (s.x, s.y, 28, 3))
-                pygame.draw.rect(self.screen, (200, 90, 70), (s.x, s.y, int(28 * ship.hp / ship.hull.hp), 3))
-        finally:
-            self.screen = screen
-        if target is not screen:
-            target.set_alpha(alpha)
-            screen.blit(target, (0, 0))
-
-    def _ship_modules(self, ship, dark):
-        """Модули видны на корпусе: броня, мачта радара, бур, сборщик, пусковые."""
-        if ship.armor_def and ship.armor > 0:
-            width = 2 if ship.armor_def.size > 1 else 1
-            self.poly(ship.hull.shape, ship.pos, ship.angle, (140, 130, 100), width=width, scale=0.92)
-        if ship.sensor:
-            mast = self.to_screen(ship.pos + Vector2(-4, 0).rotate(ship.angle))
-            r = 3 if ship.sensor.size > 1 else 2
-            pygame.draw.circle(self.screen, dark, mast, r)
-            if ship.sensor.veil_resist:            # сонар — дуга, радар — вращающаяся антенна
-                pygame.draw.circle(self.screen, (110, 170, 180), mast, r + 3, 1)
-            else:
-                sweep = heading(self.frame * 6) * (r + 4)
-                pygame.draw.line(self.screen, (110, 170, 180), mast, mast + sweep, 1)
-        for i, slot, m in ship.modules():
-            if m.category != "utility":
-                continue
-            if m.effect == "drill":
-                bow = ship.pos + Vector2(ship.hull.shape[0]).rotate(ship.angle)
-                tip = bow + heading(ship.angle) * 6
-                pygame.draw.line(self.screen, (170, 160, 130), self.to_screen(bow), self.to_screen(tip), 3)
-            elif m.effect == "collector":
-                for side in (-1, 1):
-                    c = ship.pos + Vector2(0, side * (ship.radius * 0.55)).rotate(ship.angle)
-                    pygame.draw.circle(self.screen, (160, 110, 210), self.to_screen(c), 3, 1)
-            elif m.effect == "cargo":
-                c = ship.pos + Vector2(-ship.radius * 0.5, 0).rotate(ship.angle)
-                pygame.draw.rect(self.screen, dark, (*(self.to_screen(c) - Vector2(3, 3)), 6, 6), 1)
-
-    def _projectile(self, pr):
-        s = self.to_screen(pr.pos)
-        d = pr.vel.normalize() if pr.vel.length_squared() else Vector2(1, 0)
-        if pr.kind == "missile":
-            pygame.draw.line(self.screen, (120, 120, 120), s, s - d * 14, 1)
-            pygame.draw.circle(self.screen, (255, 200, 120) if not pr.lost else (150, 130, 110), s, 2)
-        elif pr.kind == "torpedo":
-            pygame.draw.line(self.screen, (90, 150, 170), s, s - d * 16, 3)
-            for k in range(3):
-                pygame.draw.circle(self.screen, (60, 100, 120), s - d * (20 + k * 8), 1)
-        else:
-            col = (250, 230, 140) if pr.side == "player" else (255, 130, 70)
-            if pr.dtype == "em":
-                col = (150, 200, 255)
-            pygame.draw.line(self.screen, col, s, s - d * (9 if pr.damage > 20 else 6), 2)
-
-    def _smoke(self, sm):
-        r = int(sm.radius)
-        surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-        a = int(110 * min(1.0, sm.life / 2.0))
-        for i in range(5):
-            pygame.draw.circle(surf, (90, 95, 100, a // 2), (r + (i - 2) * r // 5, r + ((i * 7) % 5 - 2) * r // 6),
-                               int(r * 0.6))
-        self.screen.blit(surf, self.to_screen(sm.pos) - Vector2(r, r))
+            s = cam.w2s(ev.pos)
+            r = cam.px(ev.data.radius)
+            n = 48
+            rot = world.t * 0.05
+            for i in range(0, n, 2):
+                a0 = rot + i / n * math.tau
+                a1 = rot + (i + 1) / n * math.tau
+                pygame.draw.line(self.screen, P.shade(ev.data.color, 0.8),
+                                 (s.x + math.cos(a0) * r, s.y + math.sin(a0) * r),
+                                 (s.x + math.cos(a1) * r, s.y + math.sin(a1) * r), 1)
 
     def _target_info(self, ship, anchor):
         """Подсказка по цели: корпус, вооружение, защита — читаемость врага."""
@@ -364,35 +202,41 @@ class Renderer:
         if ship.fires or ship.leaks:
             lines.append(f"Пожары {ship.fires}, течи {ship.leaks}")
         x, y = anchor
-        width = max(self.font.size(line)[0] for line in lines)
+        width = max(self.small.size(line)[0] for line in lines) + 16
+        height = 15 * len(lines) + 10
         if x + width > self.w - 345:              # не заезжать на панель оружия справа
-            x = anchor[0] - width - 2 * (ship.radius + 17)
-        y = min(max(y, 60), self.h - 16 * len(lines) - 10)
+            x = anchor[0] - width - 2 * (self.cam.px(ship.radius) + 17)
+        y = min(max(y, 60), self.h - height - 120)       # выше подсказок внизу экрана
+        box = pygame.Surface((width, height), pygame.SRCALPHA)
+        box.fill((6, 10, 16, 200))
+        self.screen.blit(box, (x, y))
+        pygame.draw.line(self.screen, P.TRACER_PIRATE, (x, y), (x, y + height), 2)
         for i, line in enumerate(lines):
-            img = self.font.render(line, True, (230, 220, 150) if i == 0 else (170, 180, 170))
-            self.screen.blit(img, (x, y + i * 16))
+            img = self.small.render(line, True, (235, 220, 160) if i == 0 else (175, 185, 180))
+            self.screen.blit(img, (x + 9, y + 5 + i * 15))
 
     def _lock_marker(self, world):
+        cam = self.cam
         gt = world.gun_target
         if gt is not None and not world.in_capsule:
-            s = self.to_screen(gt.pos)
-            r = gt.radius + 7
-            pygame.draw.circle(self.screen, (230, 220, 150), s, r, 1)
+            s = cam.w2s(gt.pos)
+            r = cam.px(gt.radius) + 8
+            pygame.draw.circle(self.screen, (230, 220, 150), s, int(r), 1)
             for a in (0, 90, 180, 270):
-                d = heading(a)
-                pygame.draw.line(self.screen, (230, 220, 150), s + d * (r - 3), s + d * (r + 4), 1)
+                d = heading(a + world.t * 30)
+                pygame.draw.line(self.screen, (230, 220, 150), s + d * (r - 3), s + d * (r + 5), 1)
             self._target_info(gt, s + Vector2(r + 10, -r))
         tgt = world.lock_candidate
         mounts = [m for m in world.player.weapons if m.defn.kind == "missile"]
         if tgt is None or not mounts or world.in_capsule:
             return
         lock = max(m.lock for m in mounts)
-        s = self.to_screen(tgt.pos)
-        r = tgt.radius + 12
+        s = cam.w2s(tgt.pos)
+        r = cam.px(tgt.radius) + 14
         col = (255, 90, 70) if lock >= 1 else (240, 180, 80) if lock > 0 else (120, 120, 120)
         for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
             c = s + Vector2(sx * r, sy * r)
-            pygame.draw.line(self.screen, col, c, c - Vector2(sx * 6, 0), 2)
-            pygame.draw.line(self.screen, col, c, c - Vector2(0, sy * 6), 2)
+            pygame.draw.line(self.screen, col, c, c - Vector2(sx * 7, 0), 2)
+            pygame.draw.line(self.screen, col, c, c - Vector2(0, sy * 7), 2)
         if 0 < lock < 1:
-            pygame.draw.arc(self.screen, col, (s.x - r, s.y - r, r * 2, r * 2), 0, lock * 6.283, 2)
+            pygame.draw.arc(self.screen, col, (s.x - r, s.y - r, r * 2, r * 2), 0, lock * math.tau, 2)

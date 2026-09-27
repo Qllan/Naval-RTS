@@ -53,3 +53,18 @@ def test_director_announces_event_once():
     assert ev.started == []
     ev.update(CALM.duration + 1, (0, 0))
     assert ev.active == []
+
+
+def test_density_grid_matches_pointwise_density():
+    import numpy as np
+    v = Veil(seed=9)
+    ev = EventDirector(first_delay=1e9)
+    v.events = ev
+    e = ev.spawn(SURGE, (4000, 3000), 0)
+    t = e.start + 4
+    xs = np.linspace(100, 7900, 17)
+    ys = np.linspace(100, 7900, 13)
+    grid = v.density_grid(xs, ys, t)
+    for j, y in enumerate(ys):
+        for i, x in enumerate(xs):
+            assert abs(grid[j, i] - v.density((x, y), t)) < 1e-9
