@@ -6,7 +6,8 @@ import pygame
 from pygame.math import Vector2
 
 from . import config as C
-from .entities import RESOURCES, heading
+from .entities import RESOURCES
+from .ship import heading
 from .ai import Tihodont
 
 WATER = (7, 13, 22)
@@ -88,19 +89,25 @@ class Renderer:
                 s = self.to_screen(pr.ship.pos)
                 pygame.draw.circle(self.screen, COL_PIRATE, s, 3)
                 pygame.draw.circle(self.screen, COL_PIRATE, s, 9, 1)
-        for b in world.bullets:
-            s = self.to_screen(b.pos)
-            e = s - b.vel.normalize() * 7 if b.vel.length_squared() else s
-            col = (250, 230, 140) if b.owner == "player" else (255, 130, 70)
-            pygame.draw.line(self.screen, col, s, e, 2)
+        for sm in world.smokes:
+            if self.on_screen(sm.pos, sm.radius):
+                self._smoke(sm)
+        for pr in world.projectiles:
+            if not self.on_screen(pr.pos):
+                continue
+            if pr.kind == "torpedo" and pr.side != "player" and p.pos.distance_to(pr.pos) > vis * 0.6:
+                continue          # торпеду под водой видно только вблизи
+            self._projectile(pr)
 
-        self._ship(p, COL_CAPSULE if world.in_capsule else COL_PLAYER, player=True)
+        alpha = 90 if p.utility_active("bioscreen") else 255
+        self._ship(p, COL_CAPSULE if world.in_capsule else COL_PLAYER, player=True, alpha=alpha)
 
         self._veil(world)
         self._storm_arms(world)
         self._fog(vis)
         if radar > 0:
             pygame.draw.circle(self.screen, (40, 90, 80), (self.w // 2, self.h // 2), int(radar), 1)
+        self._lock_marker(world)
 
     # --------------------------------------------------------------------
 
@@ -243,16 +250,91 @@ class Renderer:
         rot = pygame.transform.rotate(surf, -Vector2(1, 0).angle_to(fwd))
         self.screen.blit(rot, rot.get_rect(center=s))
 
-    def _ship(self, ship, color, player=False):
-        if ship.throttle > 0.05:
-            tail = ship.pos - heading(ship.angle) * (ship.cls.radius + 4)
-            flame = (255, 160, 70) if ship.boosting else (120, 180, 220)
-            pygame.draw.circle(self.screen, flame, self.to_screen(tail), 3 + (2 if ship.boosting else 0))
-        if player and ship.fouling > 0.05:
-            f = ship.fouling
-            color = tuple(int(c * (1 - f) + v * f) for c, v in zip(color, (150, 80, 200)))
-        self.poly(ship.cls.shape, ship.pos, ship.angle, color)
-        if ship.shield > 1:
-            a = ship.shield / max(1.0, ship.cls.shield)
-            col = (int(30 + 30 * a), int(60 + 80 * a), int(90 + 110 * a))
-            pygame.draw.circle(self.screen, col, self.to_screen(ship.pos), int(ship.cls.radius + 6), 1)
+    def _ship(self, ship, color, player=False, alpha=255):
+        target = self.screen
+        if alpha < 255:
+            target = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+        screen, self.screen = self.screen, target
+        try:
+            if ship.throttle > 0.05 and ship.engine:
+                tail = ship.pos - heading(ship.angle) * (ship.radius + 4)
+                flame = (255, 160, 70) if ship.boosting else (120, 180, 220)
+                pygame.draw.circle(self.screen, flame, self.to_screen(tail), 3 + (2 if ship.boosting else 0))
+            if player and ship.fouling > 0.05:
+                f = ship.fouling
+                color = tuple(int(c * (1 - f) + v * f) for c, v in zip(color, (150, 80, 200)))
+            self.poly(ship.hull.shape, ship.pos, ship.angle, color)
+            if ship.armor_max and ship.armor > 0:
+                self.poly(ship.hull.shape, ship.pos, ship.angle, (120, 110, 90), width=1)
+            dark = tuple(int(c * 0.45) for c in color)
+            for m in ship.weapons:
+                base = self.to_screen(m.world_pos(ship))
+                barrel = 9 if m.defn.size > 1 else 6
+                if m.defn.kind == "gun":
+                    end = base + heading(m.world_angle(ship)) * barrel
+                    pygame.draw.line(self.screen, dark, base, end, 3 if m.defn.size > 1 else 2)
+                    pygame.draw.circle(self.screen, dark, base, 3 if m.defn.size > 1 else 2)
+                else:
+                    pygame.draw.rect(self.screen, dark, (base.x - 3, base.y - 3, 6, 6))
+            if ship.shield > 1 and ship.shield_max:
+                a = ship.shield / ship.shield_max
+                col = (int(30 + 30 * a), int(60 + 80 * a), int(90 + 110 * a))
+                pygame.draw.circle(self.screen, col, self.to_screen(ship.pos), int(ship.radius + 6), 1)
+            if not player and ship.hp < ship.hull.hp:
+                s = self.to_screen(ship.pos) + Vector2(-14, -ship.radius - 10)
+                pygame.draw.rect(self.screen, (40, 20, 20), (s.x, s.y, 28, 3))
+                pygame.draw.rect(self.screen, (200, 90, 70), (s.x, s.y, int(28 * ship.hp / ship.hull.hp), 3))
+        finally:
+            self.screen = screen
+        if target is not screen:
+            target.set_alpha(alpha)
+            screen.blit(target, (0, 0))
+
+    def _projectile(self, pr):
+        s = self.to_screen(pr.pos)
+        d = pr.vel.normalize() if pr.vel.length_squared() else Vector2(1, 0)
+        if pr.kind == "missile":
+            pygame.draw.line(self.screen, (120, 120, 120), s, s - d * 14, 1)
+            pygame.draw.circle(self.screen, (255, 200, 120) if not pr.lost else (150, 130, 110), s, 2)
+        elif pr.kind == "torpedo":
+            pygame.draw.line(self.screen, (90, 150, 170), s, s - d * 16, 3)
+            for k in range(3):
+                pygame.draw.circle(self.screen, (60, 100, 120), s - d * (20 + k * 8), 1)
+        else:
+            col = (250, 230, 140) if pr.side == "player" else (255, 130, 70)
+            if pr.dtype == "em":
+                col = (150, 200, 255)
+            pygame.draw.line(self.screen, col, s, s - d * (9 if pr.damage > 20 else 6), 2)
+
+    def _smoke(self, sm):
+        r = int(sm.radius)
+        surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+        a = int(110 * min(1.0, sm.life / 2.0))
+        for i in range(5):
+            pygame.draw.circle(surf, (90, 95, 100, a // 2), (r + (i - 2) * r // 5, r + ((i * 7) % 5 - 2) * r // 6),
+                               int(r * 0.6))
+        self.screen.blit(surf, self.to_screen(sm.pos) - Vector2(r, r))
+
+    def _lock_marker(self, world):
+        gt = world.gun_target
+        if gt is not None and not world.in_capsule:
+            s = self.to_screen(gt.pos)
+            r = gt.radius + 7
+            pygame.draw.circle(self.screen, (230, 220, 150), s, r, 1)
+            for a in (0, 90, 180, 270):
+                d = heading(a)
+                pygame.draw.line(self.screen, (230, 220, 150), s + d * (r - 3), s + d * (r + 4), 1)
+        tgt = world.lock_candidate
+        mounts = [m for m in world.player.weapons if m.defn.kind == "missile"]
+        if tgt is None or not mounts or world.in_capsule:
+            return
+        lock = max(m.lock for m in mounts)
+        s = self.to_screen(tgt.pos)
+        r = tgt.radius + 12
+        col = (255, 90, 70) if lock >= 1 else (240, 180, 80) if lock > 0 else (120, 120, 120)
+        for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+            c = s + Vector2(sx * r, sy * r)
+            pygame.draw.line(self.screen, col, c, c - Vector2(sx * 6, 0), 2)
+            pygame.draw.line(self.screen, col, c, c - Vector2(0, sy * 6), 2)
+        if 0 < lock < 1:
+            pygame.draw.arc(self.screen, col, (s.x - r, s.y - r, r * 2, r * 2), 0, lock * 6.283, 2)

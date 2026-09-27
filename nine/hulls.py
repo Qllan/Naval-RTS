@@ -1,0 +1,116 @@
+"""Каталог корпусов. Корпус задаёт прочность, массу, манёвренность, трюм и слоты.
+
+Слоты оружия — это точки на корпусе (`pos`, нос вдоль +X) с направлением
+(`facing`) и предельным сектором (`arc`): кормовая турель не стреляет вперёд
+сквозь надстройку, бортовые — только на свой борт.
+"""
+
+from dataclasses import dataclass
+
+from .modules import M, S
+
+
+@dataclass(frozen=True)
+class Slot:
+    category: str
+    size: int
+    pos: tuple = (0.0, 0.0)
+    facing: float = 0.0
+    arc: float = 360.0
+
+
+@dataclass(frozen=True)
+class HullDef:
+    """`price` — цена голого корпуса; базовое оснащение оплачивается отдельно."""
+    key: str
+    name: str
+    role: str
+    hp: float
+    mass: float
+    speed_mult: float
+    turn_rate: float        # град/с на ходу
+    cargo: int
+    radius: float
+    price: int
+    shape: tuple
+    slots: tuple
+    default_fit: tuple       # ключ модуля (или None) на каждый слот
+    purchasable: bool = True
+    desc: str = ""
+
+
+def _core(engine, reactor, shield, armor, sensor):
+    return (Slot("engine", engine), Slot("reactor", reactor), Slot("shield", shield),
+            Slot("armor", armor), Slot("sensor", sensor))
+
+
+_ALL = [
+    HullDef(
+        "scout", "Скаут", "Разведка, добыча, лёгкий бой", hp=90, mass=50, speed_mult=1.0, turn_rate=150,
+        cargo=20, radius=16, price=400,
+        shape=((20, 0), (4, 8), (-14, 8), (-18, 0), (-14, -8), (4, -8)),
+        slots=(Slot("weapon", S, (6, 0), 0, 300),) + _core(S, S, S, S, M) + (Slot("utility", S),),
+        default_fit=("autocannon_s", "engine_s", "reactor_s", "shield_s", None, "sensor_s", None),
+        desc="Быстрый и хрупкий. Большой слот сенсора — глаза флота.",
+    ),
+    HullDef(
+        "corvette", "Корвет", "Охотник на рейдеров", hp=150, mass=85, speed_mult=0.97, turn_rate=125,
+        cargo=25, radius=18, price=900,
+        shape=((24, 0), (8, 10), (-18, 10), (-22, 0), (-18, -10), (8, -10)),
+        slots=(Slot("weapon", S, (10, 0), 0, 300), Slot("weapon", S, (-10, 0), 180, 300))
+        + _core(S, S, S, M, S) + (Slot("utility", S), Slot("utility", S)),
+        default_fit=("autocannon_s", "autocannon_s", "engine_s", "reactor_s2", "shield_s", "armor_s", "sensor_s",
+                     None, None),
+        desc="Две турели — нос и корма. Первый настоящий боевой корабль.",
+    ),
+    HullDef(
+        "torpedo_boat", "Торпедный катер", "Засады и удары по крупным целям", hp=110, mass=65, speed_mult=1.05,
+        turn_rate=135, cargo=15, radius=17, price=1000,
+        shape=((26, 0), (6, 7), (-18, 8), (-20, 0), (-18, -8), (6, -7)),
+        slots=(Slot("weapon", M, (14, 0), 0, 20), Slot("weapon", S, (-6, 0), 180, 300))
+        + _core(S, S, S, S, S) + (Slot("utility", S), Slot("utility", S)),
+        default_fit=("torpedo_m", "autocannon_s", "engine_s2", "reactor_s", "shield_s", None, "sensor_s",
+                     "smoke", None),
+        desc="Носовой торпедный аппарат бьёт по курсу. Наводись корпусом.",
+    ),
+    HullDef(
+        "cruiser", "Крейсер", "Универсал, основной боевой", hp=240, mass=150, speed_mult=0.92, turn_rate=90,
+        cargo=35, radius=22, price=1800,
+        shape=((28, 0), (10, 11), (-20, 12), (-26, 0), (-20, -12), (10, -11)),
+        slots=(Slot("weapon", M, (14, 0), 0, 270), Slot("weapon", M, (-14, 0), 180, 270),
+               Slot("weapon", S, (0, -10), -90, 180), Slot("weapon", S, (0, 10), 90, 180))
+        + _core(M, M, M, M, M) + (Slot("utility", S), Slot("utility", S)),
+        default_fit=("cannon_m", None, "autocannon_s", "autocannon_s", "engine_m", "reactor_m", "shield_m",
+                     "armor_s", "sensor_s", None, None),
+        desc="Две тяжёлые башни и два бортовых орудия.",
+    ),
+    HullDef(
+        "barge", "Барка добытчика", "Добыча и перевозки", hp=220, mass=140, speed_mult=0.82, turn_rate=70,
+        cargo=90, radius=26, price=1400,
+        shape=((24, 0), (18, 14), (-26, 14), (-26, -14), (18, -14)),
+        slots=(Slot("weapon", S, (4, 0), 0, 360),) + _core(M, M, S, M, S)
+        + (Slot("utility", M), Slot("utility", M), Slot("utility", S)),
+        default_fit=("autocannon_s", "engine_m", "reactor_m", "shield_s", "armor_s", "sensor_s", "drill",
+                     "collector", None),
+        desc="Огромный трюм и слоты под добычу. Гружёная — медленная.",
+    ),
+    # --- только для NPC и особых случаев ---------------------------------
+    HullDef(
+        "raider", "Рейдер Прилива", "Пират", hp=70, mass=45, speed_mult=1.0, turn_rate=135, cargo=0, radius=15,
+        price=300, purchasable=False,
+        shape=((18, 0), (0, 10), (-14, 6), (-10, 0), (-14, -6), (0, -10)),
+        slots=(Slot("weapon", S, (4, 0), 0, 300), Slot("weapon", S, (-4, 0), 0, 360))
+        + _core(S, S, S, S, S),
+        default_fit=("autocannon_s", None, "engine_s2", "reactor_s", "shield_s", None, "sensor_s"),
+    ),
+    HullDef(
+        "capsule", "Спасательная капсула", "", hp=22, mass=20, speed_mult=0.9, turn_rate=200, cargo=0, radius=8,
+        price=0, purchasable=False,
+        shape=((8, 0), (0, 6), (-7, 0), (0, -6)),
+        slots=(Slot("engine", S), Slot("reactor", S)),
+        default_fit=("engine_s", "reactor_s"),
+    ),
+]
+
+HULLS = {h.key: h for h in _ALL}
+PLAYER_HULLS = [h for h in _ALL if h.purchasable]

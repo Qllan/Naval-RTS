@@ -46,9 +46,3 @@ TRAUMA_RADAR_MULT = 0.8
 MEDICAL_COST = 150
 REPAIR_COST_PER_HP = 1.5
 CLEAN_COST = 60
-
-UPGRADE_COSTS = {
-    "sensor": [250, 600, 1200],
-    "cargo": [200, 500, 1000],
-    "gun": [300, 700, 1400],
-}

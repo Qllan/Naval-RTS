@@ -4,16 +4,27 @@ import random
 
 from pygame.math import Vector2
 
-from .entities import Ship, heading
+from .ship import Ship, heading
 
 
-def steer_towards(ship, target, dt_turn_gain=0.05):
+def steer_towards(ship, target, gain=0.05):
     """Возвращает turn в [-1, 1], чтобы нос смотрел на цель."""
     to = Vector2(target) - ship.pos
     if to.length_squared() < 1:
         return 0.0
     diff = (heading(ship.angle).angle_to(to) + 180) % 360 - 180
-    return max(-1.0, min(1.0, diff * dt_turn_gain))
+    return max(-1.0, min(1.0, diff * gain))
+
+
+# Варианты оснащения рейдеров: (корпус, модули, минимальная плотность для появления)
+PIRATE_LOADOUTS = {
+    "gunner": ("raider", ("autocannon_s", None, "engine_s2", "reactor_s", "shield_s", None, "sensor_s"), 0.0),
+    "brawler": ("raider", ("scatter_s", None, "engine_s2", "reactor_s", "shield_s", None, "sensor_s"), 0.2),
+    "rocketeer": ("raider", ("autocannon_s", "missile_s", "engine_s2", "reactor_s", "shield_s", None,
+                             "sensor_s"), 0.35),
+    "hunter": ("corvette", ("scatter_s", "autocannon_s", "engine_s", "reactor_s2", "shield_s", "armor_s",
+                            "sensor_s", None, None), 0.5),
+}
 
 
 class Pirate:
@@ -21,28 +32,33 @@ class Pirate:
 
     SENSOR = 700.0
 
-    def __init__(self, pos, rng: random.Random):
-        self.ship = Ship("raider", pos, rng.uniform(0, 360))
+    def __init__(self, pos, rng: random.Random, loadout="gunner"):
+        hull, fit, _ = PIRATE_LOADOUTS[loadout]
+        self.loadout = loadout
+        self.ship = Ship(hull, pos, rng.uniform(0, 360), fit=fit, side="pirate")
         self.rng = rng
         self.state = "patrol"
         self.home = Vector2(pos)
         self.waypoint = self._new_waypoint()
         self.lost_timer = 0.0
+        guns = [w.defn.range for w in self.ship.weapons if w.defn.kind == "gun"]
+        self.engage_range = min(guns) * 0.75 if guns else 400
 
     def _new_waypoint(self):
         return self.home + Vector2(1, 0).rotate(self.rng.uniform(0, 360)) * self.rng.uniform(100, 500)
 
     def think(self, player_pos, player_signature, density, dt):
-        """Возвращает (throttle, turn, fire, aim)."""
-        dist = self.ship.pos.distance_to(player_pos) if player_pos is not None else 1e9
+        """Возвращает (throttle, turn, sees_player)."""
+        ship = self.ship
+        dist = ship.pos.distance_to(player_pos) if player_pos is not None else 1e9
         # Чем плотнее Пелена, тем хуже видят и пираты
         detect = self.SENSOR * (1.0 - 0.6 * density) * player_signature
         sees = dist < detect
 
-        if self.ship.hull < self.ship.cls.hull * 0.25:
+        if ship.hp < ship.hull.hp * 0.25 or ship.subsystems["weapons"] < 0.2:
             self.state = "flee"
         elif sees:
-            self.state = "attack" if dist < 360 else "chase"
+            self.state = "attack" if dist < self.engage_range * 1.3 else "chase"
             self.lost_timer = 4.0
         elif self.state in ("chase", "attack"):
             self.lost_timer -= dt
@@ -50,19 +66,21 @@ class Pirate:
                 self.state = "patrol"
 
         if self.state == "patrol":
-            if self.ship.pos.distance_to(self.waypoint) < 60:
+            if ship.pos.distance_to(self.waypoint) < 60:
                 self.waypoint = self._new_waypoint()
-            return 0.45, steer_towards(self.ship, self.waypoint), False, None
+            return 0.45, steer_towards(ship, self.waypoint), sees
         if self.state == "chase":
-            return 1.0, steer_towards(self.ship, player_pos), False, None
+            return 1.0, steer_towards(ship, player_pos), sees
         if self.state == "attack":
-            # кружит на дистанции и стреляет
-            to = Vector2(player_pos) - self.ship.pos
-            orbit = Vector2(player_pos) - to.normalize().rotate(40) * 220 if to.length() > 0 else player_pos
-            return 0.8, steer_towards(self.ship, orbit), True, Vector2(player_pos)
-        # flee
-        away = self.ship.pos + (self.ship.pos - Vector2(player_pos if player_pos is not None else self.home))
-        return 1.0, steer_towards(self.ship, away), False, None
+            # кружит на дистанции своего оружия
+            to = Vector2(player_pos) - ship.pos
+            if to.length() > 0:
+                orbit = Vector2(player_pos) - to.normalize().rotate(40) * self.engage_range
+            else:
+                orbit = Vector2(player_pos)
+            return 0.8, steer_towards(ship, orbit), sees
+        away = ship.pos + (ship.pos - Vector2(player_pos if player_pos is not None else self.home))
+        return 1.0, steer_towards(ship, away), sees
 
 
 class Tihodont:

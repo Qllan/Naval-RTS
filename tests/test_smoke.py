@@ -3,7 +3,7 @@ import pygame
 from nine.game import Game
 
 
-def test_game_runs_headless_frames():
+def test_game_runs_headless_frames_and_port_screens():
     pygame.display.init()
     pygame.font.init()
     screen = pygame.display.set_mode((1280, 720))
@@ -13,8 +13,17 @@ def test_game_runs_headless_frames():
         g.step(1 / 60)
     g.docked = True
     g.world.dock()
-    g.step(1 / 60)
-    for key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_0, pygame.K_m):
-        g.dock_action(key)
-    assert g.world.t > 1.0
+    g.port_ui.reset()
+    g.world.captain.credits = 10_000
+    ui, w = g.port_ui, g.world
+    keys = [pygame.K_RETURN, pygame.K_DOWN, pygame.K_RETURN,           # сервис
+            pygame.K_RIGHT, pygame.K_DOWN, pygame.K_RETURN,            # верфь: корвет
+            pygame.K_RIGHT, pygame.K_RETURN, pygame.K_DOWN, pygame.K_RETURN,   # оснащение
+            pygame.K_BACKSPACE, pygame.K_RIGHT]                         # снять, склад
+    for key in keys:
+        ui.handle_key(key, w)
+        g.step(1 / 60)
+    assert w.player.hull.key == "corvette"
+    assert w.captain.storage
+    assert ui.handle_key(pygame.K_ESCAPE, w) in ("leave", None)
     pygame.quit()

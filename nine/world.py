@@ -1,7 +1,4 @@
-"""Симуляция мира. Не знает про экран и клавиатуру — только Controls на входе.
-
-Благодаря этому мир можно гонять в тестах без окна, а позже — на сервере.
-"""
+"""Симуляция мира. Не знает про экран и клавиатуру — только Controls на входе."""
 
 import math
 import random
@@ -11,10 +8,21 @@ from dataclasses import dataclass, field
 from pygame.math import Vector2
 
 from . import config as C
-from .ai import Pirate, Ray, Tihodont
-from .entities import RESOURCES, SHIP_CLASSES, Bullet, Loot, ResourceNode, Ship, heading
+from .ai import PIRATE_LOADOUTS, Pirate, Ray, Tihodont
+from .combat import lead_point, try_fire, update_lock, update_projectile
+from .entities import RESOURCES, Loot, ResourceNode, Smoke
 from .events import EventDirector
+from .hulls import HULLS
+from .modules import MODULES
+from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship, fit_problems
 from .veil import Veil
+
+MODULE_RESALE = 0.5
+HULL_RESALE = 0.5
+SUBSYSTEM_REPAIR_COST = 80      # за 100% одной подсистемы
+ARMOR_REPAIR_COST = 0.8         # за единицу брони
+LOCK_PICK_RADIUS = 260.0        # насколько близко к курсору должна быть цель для захвата
+FIRE_CONTROL_RADIUS = 140.0     # цель ближе к курсору — турели сами берут упреждение
 
 
 @dataclass
@@ -22,9 +30,11 @@ class Controls:
     throttle: float = 0.0     # -1..1
     turn: float = 0.0         # -1..1, + = по часовой на экране
     boost: bool = False
-    fire: bool = False
+    fire: bool = False        # пушки
+    fire2: bool = False       # ракеты и торпеды
     aim: Vector2 | None = None
     mine: bool = False
+    activate: list = field(default_factory=list)   # номера активных утилит, нажатые в этом кадре
 
 
 @dataclass
@@ -33,8 +43,8 @@ class Captain:
     credits: int = C.START_CREDITS
     debt: int = 0
     trauma: bool = False
-    upgrades: dict = field(default_factory=lambda: {"sensor": 0, "cargo": 0, "gun": 0})
     cargo: dict = field(default_factory=dict)
+    storage: list = field(default_factory=list)     # модули на складе порта
     pending_insurance: int = 0
     kills: int = 0
 
@@ -53,11 +63,14 @@ class World:
         self.player = Ship("scout", self.port + Vector2(0, -260), -90)
         self.in_capsule = False
         self.emp_timer = 0.0
+        self.lock_candidate = None
+        self.gun_target = None
 
         self.pirates: list[Pirate] = []
         self.tihodonts: list[Tihodont] = []
         self.rays: list[Ray] = []
-        self.bullets: list[Bullet] = []
+        self.projectiles = []
+        self.smokes: list[Smoke] = []
         self.nodes: list[ResourceNode] = []
         self.loot: list[Loot] = []
         self.log: deque = deque(maxlen=7)
@@ -85,9 +98,7 @@ class World:
     def _spawn_node(self):
         for _ in range(20):
             pos = self._random_pos()
-            if pos.distance_to(self.port) < C.PORT_RADIUS + 120:
-                continue
-            if pos.distance_to(self.eye) < C.EYE_WALL_R:
+            if pos.distance_to(self.port) < C.PORT_RADIUS + 120 or pos.distance_to(self.eye) < C.EYE_WALL_R:
                 continue
             d = self.veil.static_density(pos.x, pos.y)
             kind = "salt" if d < C.ZONE_MIST else "condensate" if d < C.ZONE_DENSE else "filament"
@@ -107,7 +118,7 @@ class World:
 
     @property
     def cargo_capacity(self):
-        return self.player.cls.cargo + 15 * self.captain.upgrades["cargo"]
+        return self.player.cargo_capacity
 
     @property
     def cargo_used(self):
@@ -116,10 +127,9 @@ class World:
     def radar_range(self):
         if self.emp_timer > 0:
             return 0.0
-        d = self.density_at(self.player.pos)
-        r = C.RADAR_BASE + C.RADAR_PER_LEVEL * self.captain.upgrades["sensor"]
-        r *= 1.0 - C.RADAR_DENSITY_PENALTY * d
-        r *= self.events.multiplier("radar", self.player.pos, self.t)
+        p = self.player
+        r = p.radar_range(self.density_at(p.pos))
+        r *= self.events.multiplier("radar", p.pos, self.t)
         if self.captain.trauma:
             r *= C.TRAUMA_RADAR_MULT
         return r
@@ -133,18 +143,26 @@ class World:
                 return tx
         return None
 
+    def in_smoke(self, pos):
+        return any(s.pos.distance_to(pos) < s.radius for s in self.smokes)
+
     def player_loud(self):
         p = self.player
-        return p.boosting or p.speed > p.cls.max_speed * 0.55
+        return p.boosting or p.speed > p.base_top_speed() * 0.55
 
     def player_signature(self):
         """Насколько игрока легко засечь (множитель к дальности сенсоров NPC)."""
         p = self.player
-        sig = 0.6 + 0.4 * min(1.0, p.speed / p.cls.max_speed)
+        if p.utility_active("bioscreen"):
+            return 0.0
+        sig = 0.6 + 0.4 * min(1.0, p.speed / max(1.0, p.base_top_speed()))
+        sig *= 0.8 + 0.4 * min(1.0, p.mass / 250.0)          # крупный корабль заметнее
         if p.boosting:
             sig *= 1.3
         if self.in_capsule:
             sig *= 0.6
+        if self.in_smoke(p.pos):
+            sig *= 0.3
         if self.sheltering_tihodont() and not self.player_loud():
             sig *= 0.05
         return sig
@@ -157,6 +175,9 @@ class World:
         d = self.player.pos.distance_to(pos)
         return d < self.visual_range() or d < self.radar_range()
 
+    def on_radar(self, pos):
+        return self.player.pos.distance_to(pos) < self.radar_range()
+
     # --- главный шаг -----------------------------------------------------
 
     def update(self, dt, ctl: Controls):
@@ -168,19 +189,26 @@ class World:
                 self.say(f"{ev.data.name}!")
 
         density = self.density_at(p.pos)
+        p.cargo_mass = self.cargo_used
+        p.reload_penalty = C.TRAUMA_RELOAD_MULT if self.captain.trauma else 1.0
         p.update(dt, ctl.throttle, ctl.turn, ctl.boost, density)
         self._eye_effects(dt)
         p.drain_shield(self.events.modifier("shield_drain", p.pos, self.t) * dt)
 
-        if ctl.fire and not self.in_capsule and p.reload_timer <= 0 and ctl.aim is not None:
-            self._player_fire(ctl.aim, density)
-        if ctl.mine and not self.in_capsule:
-            self._mine(dt)
+        if not self.in_capsule:
+            self._player_weapons(dt, ctl, density)
+            for idx in ctl.activate:
+                self._activate_utility(idx)
+            if ctl.mine:
+                self._mine(dt)
 
         self._update_pirates(dt)
         self._update_fauna(dt)
-        self._update_bullets(dt)
+        self._update_projectiles(dt)
         self._update_loot(dt)
+        for s in self.smokes:
+            s.life -= dt
+        self.smokes = [s for s in self.smokes if s.life > 0]
 
         if not p.alive:
             self._on_player_destroyed()
@@ -189,30 +217,79 @@ class World:
         p = self.player
         dist = p.pos.distance_to(self.eye)
         self.emp_timer = max(0.0, self.emp_timer - dt)
-        if dist < C.EYE_BELT_R and dist > C.EYE_CALM_R:
-            # Гравитационная аномалия: течения тянут к центру, слабых — сильнее
-            pull = 40.0 * (1.0 - dist / C.EYE_BELT_R) * (140.0 / p.cls.hull) ** 0.5
+        if C.EYE_CALM_R < dist < C.EYE_BELT_R:
+            # Гравитационная аномалия: течения тянут к центру, лёгких — сильнее
+            pull = 40.0 * (1.0 - dist / C.EYE_BELT_R) * (140.0 / p.mass) ** 0.5
             p.vel += (self.eye - p.pos).normalize() * pull * dt
         if self.veil.in_wall(p.pos):
-            p.damage(6.0 * dt)                            # стихийный урон
+            p.apply_damage(6.0 * dt, "kinetic", self.rng)          # стихийный урон
             if self.emp_timer <= 0 and self.rng.random() < 0.08 * dt:
                 self.emp_timer = 6.0
                 p.shield = 0.0
+                p.capacitor *= 0.3
                 self.say("ЭМ-вспышка! Электроника отключена.")
 
-    def _player_fire(self, aim, density):
-        p, cap = self.player, self.captain
-        spread = 3.0 + 12.0 * density - 3.0 * self.events.modifier("accuracy", p.pos, self.t)
-        direction = (Vector2(aim) - p.pos)
-        if direction.length_squared() < 1:
-            direction = heading(p.angle)
-        direction = direction.normalize().rotate(self.rng.uniform(-spread, spread) if spread > 0 else 0)
-        dmg = p.cls.gun_damage * (1.0 + 0.25 * cap.upgrades["gun"])
-        self.bullets.append(Bullet(p.pos + direction * p.cls.radius, direction * 620 + p.vel * 0.5, dmg, "player"))
-        reload = p.cls.reload * (1.0 - 0.12 * cap.upgrades["gun"])
-        if cap.trauma:
-            reload *= C.TRAUMA_RELOAD_MULT
-        p.reload_timer = reload
+    # --- оружие игрока ----------------------------------------------------
+
+    def _nearest_to_cursor(self, aim, radius, need_radar):
+        if aim is None:
+            return None
+        best, best_d = None, radius
+        for pr in self.pirates:
+            pos = pr.ship.pos
+            visible = self.on_radar(pos) if need_radar else self.perceives(pos)
+            if not visible:
+                continue
+            d = pos.distance_to(aim)
+            if d < best_d:
+                best, best_d = pr.ship, d
+        return best
+
+    def _player_weapons(self, dt, ctl, density):
+        p = self.player
+        aim = ctl.aim if ctl.aim is not None else p.pos + Vector2(1, 0).rotate(p.angle) * 300
+        acc = self.events.modifier("accuracy", p.pos, self.t)
+        # Ракетам нужна цель на радаре; пушечной СУО хватает и глаз
+        self.lock_candidate = self._nearest_to_cursor(aim, LOCK_PICK_RADIUS, need_radar=True)
+        self.gun_target = self._nearest_to_cursor(aim, FIRE_CONTROL_RADIUS, need_radar=False)
+        # Пелена сбивает расчёт упреждения
+        noise = Vector2(self.rng.gauss(0, 1), self.rng.gauss(0, 1)) * 60 * density if self.gun_target else None
+        for m in p.weapons:
+            kind = m.defn.kind
+            if kind == "gun":
+                point = lead_point(m.world_pos(p), self.gun_target, m.defn.speed, noise) if self.gun_target else aim
+                aimed = m.aim(p, point, dt)
+                if ctl.fire and aimed:
+                    self.projectiles += try_fire(p, m, self.rng, density, point, acc)
+            elif kind == "missile":
+                tgt = self.lock_candidate if ctl.fire2 else None
+                visible = tgt is not None and tgt.pos.distance_to(p.pos) < m.defn.range
+                update_lock(m, p, tgt, visible, density, dt)
+                if ctl.fire2:
+                    shots = try_fire(p, m, self.rng, density)
+                    if shots:
+                        m.lock = 0.0
+                    self.projectiles += shots
+            elif kind == "torpedo" and ctl.fire2:
+                self.projectiles += try_fire(p, m, self.rng, density)
+
+    def _activate_utility(self, idx):
+        p = self.player
+        u = p.activate(idx)
+        if u is None:
+            return
+        eff = u.defn.effect
+        self.say(f"{u.defn.name}: включено")
+        if eff == "smoke":
+            self.smokes.append(Smoke(Vector2(p.pos), u.defn.value, u.defn.duration))
+        elif eff == "ecm":
+            for pr in self.projectiles:
+                if pr.kind == "missile" and pr.target is p and pr.pos.distance_to(p.pos) < u.defn.value:
+                    pr.lost = True
+            for pi in self.pirates:
+                if pi.ship.pos.distance_to(p.pos) < u.defn.value:
+                    for m in pi.ship.weapons:
+                        m.lock = 0.0
 
     def _mine(self, dt):
         p = self.player
@@ -224,7 +301,7 @@ class World:
         space = self.cargo_capacity - self.cargo_used
         if space <= 0:
             return
-        rate = 6.0 * (1.8 if p.cls.key == "barge" else 1.0)
+        rate = 6.0 * p.mining_mult(node.kind)
         take = min(rate * dt, node.amount, space)
         node.amount -= take
         self.captain.cargo[node.kind] = self.captain.cargo.get(node.kind, 0) + take
@@ -234,33 +311,49 @@ class World:
                 self._spawn_node()
             self.say(f"Точка выработана: {RESOURCES[node.kind].name}")
 
+    # --- NPC ----------------------------------------------------------------
+
+    def _pick_loadout(self, density):
+        options = [k for k, (_, _, dmin) in PIRATE_LOADOUTS.items() if density >= dmin]
+        weights = [1.0 + 2.0 * PIRATE_LOADOUTS[k][2] for k in options]
+        return self.rng.choices(options, weights)[0]
+
     def _update_pirates(self, dt):
         p = self.player
         self.pirate_spawn_cd -= dt
         density = self.density_at(p.pos)
         wanted = 0 if p.pos.distance_to(self.port) < 1500 else 1 + int(4 * density)
-        alive = [pr for pr in self.pirates if pr.ship.pos.distance_to(p.pos) < 2600]
-        self.pirates = alive
+        self.pirates = [pr for pr in self.pirates if pr.ship.pos.distance_to(p.pos) < 2600]
         if len(self.pirates) < wanted and self.pirate_spawn_cd <= 0:
             pos = p.pos + Vector2(1, 0).rotate(self.rng.uniform(0, 360)) * self.rng.uniform(1100, 1500)
             if pos.distance_to(self.port) > 1400:
                 pos.x = min(max(pos.x, 50), C.WORLD_W - 50)
                 pos.y = min(max(pos.y, 50), C.WORLD_H - 50)
-                self.pirates.append(Pirate(pos, self.rng))
+                self.pirates.append(Pirate(pos, self.rng, self._pick_loadout(self.density_at(pos))))
             self.pirate_spawn_cd = 12.0
 
         sig = self.player_signature()
         for pr in self.pirates:
-            d = self.density_at(pr.ship.pos)
-            throttle, turn, fire, aim = pr.think(p.pos, sig, d, dt)
-            pr.ship.update(dt, throttle, turn, False, d)
-            if fire and aim is not None and pr.ship.reload_timer <= 0:
-                direction = aim - pr.ship.pos
-                if direction.length() > 1:
-                    spread = 6.0 + 15.0 * d
-                    direction = direction.normalize().rotate(self.rng.uniform(-spread, spread))
-                    self.bullets.append(Bullet(pr.ship.pos + direction * 16, direction * 520, pr.ship.cls.gun_damage, "pirate"))
-                    pr.ship.reload_timer = pr.ship.cls.reload
+            s = pr.ship
+            d = self.density_at(s.pos)
+            throttle, turn, sees = pr.think(p.pos, sig, d, dt)
+            s.update(dt, throttle, turn, False, d)
+            dist = s.pos.distance_to(p.pos)
+            engaged = pr.state == "attack" and sees
+            smoke = self.in_smoke(p.pos)
+            for m in s.weapons:
+                if m.defn.kind == "gun":
+                    lead = lead_point(m.world_pos(s), p, m.defn.speed)
+                    aimed = m.aim(s, lead, dt)
+                    if engaged and aimed and dist < m.defn.range * 0.95:
+                        self.projectiles += try_fire(s, m, self.rng, d, lead, 0.0, smoke)
+                elif m.defn.kind == "missile":
+                    update_lock(m, s, p if engaged else None, dist < m.defn.range, d, dt)
+                    shots = try_fire(s, m, self.rng, d)
+                    if shots:
+                        m.lock = 0.0
+                        self.say("Ракета! Захват на вас.")
+                    self.projectiles += shots
 
     def _update_fauna(self, dt):
         p = self.player
@@ -271,7 +364,7 @@ class World:
             if tx.angry and not was and tx.pos.distance_to(p.pos) < 400:
                 self.say("Тиходонт разбужен шумом двигателя!")
             if tx.angry and tx.pos.distance_to(p.pos) < Tihodont.RADIUS * 0.7:
-                p.damage(30.0 * dt, ignore_shield=True)
+                p.apply_damage(30.0 * dt, "torpedo", self.rng)       # таран сквозь щиты
 
         self.rays = [r for r in self.rays if r.pos.distance_to(p.pos) < 1500]
         while len(self.rays) < 14:
@@ -280,31 +373,35 @@ class World:
         for r in self.rays:
             r.update(dt, self.events.warning_at(r.pos, self.t))
 
-    def _update_bullets(self, dt):
+    def _update_projectiles(self, dt):
         p = self.player
         keep = []
-        for b in self.bullets:
-            b.pos += b.vel * dt
-            b.life -= dt
-            hit = False
-            if b.owner == "player":
-                for pr in self.pirates:
-                    if pr.ship.pos.distance_to(b.pos) < pr.ship.cls.radius:
-                        pr.ship.damage(b.damage)
-                        hit = True
-                        break
-            elif p.pos.distance_to(b.pos) < p.cls.radius:
-                p.damage(b.damage)
-                hit = True
-            if not hit and b.life > 0:
-                keep.append(b)
-        self.bullets = keep
+        for pr in self.projectiles:
+            update_projectile(pr, dt, self.density_at(pr.pos), self.rng)
+            targets = [x.ship for x in self.pirates] if pr.side == "player" else [p]
+            hit = None
+            for ship in targets:
+                if ship.alive and ship.pos.distance_to(pr.pos) < ship.radius + (4 if pr.kind != "shell" else 0):
+                    hit = ship
+                    break
+            if hit is not None:
+                sub = hit.apply_damage(pr.damage, pr.dtype, self.rng)
+                if hit is p and sub:
+                    self.say(f"Повреждение: {SUBSYSTEM_NAME[sub]}")
+                continue
+            if pr.life > 0:
+                keep.append(pr)
+        self.projectiles = keep
 
-        for pr in [pr for pr in self.pirates if not pr.ship.alive]:
-            self.pirates.remove(pr)
+        for pi in [pi for pi in self.pirates if not pi.ship.alive]:
+            self.pirates.remove(pi)
             self.captain.kills += 1
             kind = self.rng.choice(["salt", "condensate", "condensate", "filament"])
-            self.loot.append(Loot(Vector2(pr.ship.pos), {kind: self.rng.randint(3, 8)}, self.rng.randint(40, 90)))
+            loot = Loot(Vector2(pi.ship.pos), {kind: self.rng.randint(3, 8)}, self.rng.randint(40, 90))
+            mods = [k for k in pi.ship.fit if k]
+            if mods and self.rng.random() < 0.35:
+                loot.modules.append(self.rng.choice(mods))
+            self.loot.append(loot)
             self.say("Рейдер Прилива потоплен. Обломки на воде.")
 
     def _update_loot(self, dt):
@@ -315,6 +412,10 @@ class World:
             if not self.in_capsule and lt.pos.distance_to(p.pos) < 45:
                 cap.credits += lt.credits
                 lt.credits = 0
+                for key in lt.modules:
+                    cap.storage.append(key)
+                    self.say(f"Трофей: {MODULES[key].name} (на склад порта)")
+                lt.modules = []
                 for kind, qty in list(lt.cargo.items()):
                     take = min(qty, self.cargo_capacity - self.cargo_used)
                     if take > 0:
@@ -346,12 +447,12 @@ class World:
         if salvage:
             self.loot.append(Loot(pos, salvage, 0, life=40.0))
         cap.cargo = {}
-        cap.pending_insurance = int(self.player.cls.price * C.INSURANCE_RATE)
+        cap.pending_insurance = int(self.player.value * C.INSURANCE_RATE)
         self.player = Ship("capsule", pos, self.player.angle)
         self.in_capsule = True
         self.say("Корабль потерян! Капсула отстрелена — доберитесь до порта.")
 
-    # --- действия в порту -----------------------------------------------
+    # --- порт: сервис -----------------------------------------------------
 
     def dock(self):
         """Вызывается при заходе в порт. Капсула получает новый корабль."""
@@ -366,7 +467,18 @@ class World:
             else:
                 self.say("Порт выдал вам списанный Скаут.")
         self.player.vel = Vector2()
-        self.player.shield = self.player.cls.shield
+        self.player.recharge()
+
+    def undock_problems(self):
+        p = self.player
+        problems = fit_problems(p.hull, p.fit)
+        if p.engine is None:
+            problems.append("Нет двигателя")
+        if p.reactor is None:
+            problems.append("Нет реактора")
+        if self.cargo_used > p.cargo_capacity + 1e-6:
+            problems.append("Груз не помещается в трюм")
+        return problems
 
     def undock(self):
         self.player.pos = self.port + Vector2(0, -C.PORT_RADIUS - 40)
@@ -381,54 +493,48 @@ class World:
         self.captain.cargo = {}
         return value
 
+    def sell_cargo_action(self):
+        return self.sell_cargo() > 0
+
+    def pay_debt_action(self):
+        return self.pay_debt() > 0
+
     def repair_cost(self):
-        return int((self.player.cls.hull - self.player.hull) * C.REPAIR_COST_PER_HP)
+        p = self.player
+        cost = (p.hull.hp - p.hp) * C.REPAIR_COST_PER_HP + (p.armor_max - p.armor) * ARMOR_REPAIR_COST
+        cost += sum(1.0 - p.subsystems[k] for k in SUBSYSTEMS) * SUBSYSTEM_REPAIR_COST
+        return int(math.ceil(cost))
 
     def repair(self):
-        cap, p = self.captain, self.player
-        missing = p.cls.hull - p.hull
-        affordable = cap.credits / C.REPAIR_COST_PER_HP
-        hp = min(missing, affordable)
-        cap.credits -= int(math.ceil(hp * C.REPAIR_COST_PER_HP))
-        p.hull += hp
-        return hp
+        cost = self.repair_cost()
+        if cost == 0 or self.captain.credits < cost:
+            return False
+        self.captain.credits -= cost
+        self.player.repair_all()
+        return True
+
+    def rearm_cost(self):
+        p = self.player
+        cost = sum((w.defn.ammo - w.ammo) * w.defn.ammo_price for w in p.weapons if w.defn.ammo)
+        cost += sum((u.defn.charges - u.charges) * u.defn.charge_price for u in p.utilities if u.defn.charges)
+        return cost
+
+    def rearm(self):
+        cost = self.rearm_cost()
+        if cost == 0 or self.captain.credits < cost:
+            return False
+        self.captain.credits -= cost
+        for w in self.player.weapons:
+            w.ammo = w.defn.ammo
+        for u in self.player.utilities:
+            u.charges = u.defn.charges
+        return True
 
     def clean_hull(self):
         if self.player.fouling <= 0.01 or self.captain.credits < C.CLEAN_COST:
             return False
         self.captain.credits -= C.CLEAN_COST
         self.player.fouling = 0.0
-        return True
-
-    def upgrade_cost(self, kind):
-        lvl = self.captain.upgrades[kind]
-        costs = C.UPGRADE_COSTS[kind]
-        return costs[lvl] if lvl < len(costs) else None
-
-    def buy_upgrade(self, kind):
-        cap = self.captain
-        cost = self.upgrade_cost(kind)
-        if cost is None or cap.debt > 0 or cap.credits < cost:
-            return False
-        cap.credits -= cost
-        cap.upgrades[kind] += 1
-        return True
-
-    def ship_cost(self, key):
-        return max(0, SHIP_CLASSES[key].price - self.player.cls.price // 2)
-
-    def buy_ship(self, key):
-        cap = self.captain
-        if key == self.player.cls.key or cap.debt > 0:
-            return False
-        cost = self.ship_cost(key)
-        if cap.credits < cost:
-            return False
-        if self.cargo_used > SHIP_CLASSES[key].cargo + 15 * cap.upgrades["cargo"]:
-            return False
-        cap.credits -= cost
-        pos = Vector2(self.player.pos)
-        self.player = Ship(key, pos, -90)
         return True
 
     def pay_debt(self):
@@ -445,3 +551,88 @@ class World:
         cap.credits -= C.MEDICAL_COST
         cap.trauma = False
         return True
+
+    # --- порт: верфь и оснащение -----------------------------------------
+
+    def hull_offer(self, key):
+        """(полная цена с базовым оснащением, доплата с учётом сдачи текущего корпуса)."""
+        hull = HULLS[key]
+        full = hull.price + sum(MODULES[k].price for k in hull.default_fit if k)
+        trade_in = int(self.player.hull.price * HULL_RESALE)
+        return full, max(0, full - trade_in)
+
+    def buy_hull(self, key):
+        """Новый корпус с базовым оснащением. Модули старого корабля уходят на склад."""
+        cap = self.captain
+        if key == self.player.hull.key or cap.debt > 0 or not HULLS[key].purchasable:
+            return "Сделка невозможна"
+        _, cost = self.hull_offer(key)
+        if cap.credits < cost:
+            return "Не хватает кредитов"
+        new = Ship(key, self.player.pos, -90)
+        if self.cargo_used > new.cargo_capacity:
+            return "Груз не поместится в трюм"
+        cap.credits -= cost
+        cap.storage += [k for k in self.player.fit if k]
+        new.fouling = 0.0
+        self.player = new
+        return None
+
+    def compatible(self, slot_index):
+        slot = self.player.hull.slots[slot_index]
+        return [m for m in MODULES.values() if m.category == slot.category and m.size <= slot.size]
+
+    def install(self, slot_index, key, from_storage=False):
+        """Поставить модуль в слот. Возвращает None или текст ошибки."""
+        p, cap = self.player, self.captain
+        slot = p.hull.slots[slot_index]
+        m = MODULES[key]
+        if m.category != slot.category or m.size > slot.size:
+            return "Модуль не подходит к слоту"
+        if from_storage and key not in cap.storage:
+            return "Нет на складе"
+        if not from_storage:
+            if cap.debt > 0:
+                return "Должникам не продают"
+            if cap.credits < m.price:
+                return "Не хватает кредитов"
+        new_fit = list(p.fit)
+        new_fit[slot_index] = key
+        power = [e for e in fit_problems(p.hull, new_fit) if "энергии" in e]
+        if power:
+            return power[0]
+        if from_storage:
+            cap.storage.remove(key)
+        else:
+            cap.credits -= m.price
+        old = p.fit[slot_index]
+        if old:
+            cap.storage.append(old)
+        p.set_module(slot_index, key)
+        # новые модули приходят заряженными
+        for w in p.weapons:
+            if w.index == slot_index:
+                w.ammo = w.defn.ammo
+        for u in p.utilities:
+            if u.index == slot_index:
+                u.charges = u.defn.charges
+        p.recharge()
+        return None
+
+    def uninstall(self, slot_index):
+        p = self.player
+        old = p.fit[slot_index]
+        if old is None:
+            return "Слот пуст"
+        self.captain.storage.append(old)
+        p.set_module(slot_index, None)
+        return None
+
+    def sell_from_storage(self, key):
+        cap = self.captain
+        if key not in cap.storage:
+            return 0
+        cap.storage.remove(key)
+        price = int(MODULES[key].price * MODULE_RESALE)
+        cap.credits += price
+        return price

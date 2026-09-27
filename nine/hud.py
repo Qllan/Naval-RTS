@@ -1,10 +1,11 @@
-"""Интерфейс: панели, миникарта, журнал, экран порта, справка."""
+"""Интерфейс в море: панели, миникарта, журнал, оружие, справка. Экран порта — в port_ui.py."""
 
 import pygame
-from pygame.math import Vector2
 
 from . import config as C
-from .entities import RESOURCES, SHIP_CLASSES
+from .entities import RESOURCES
+from .modules import SIZE_NAME
+from .ship import SUBSYSTEM_NAME, SUBSYSTEMS
 
 UI = (170, 190, 200)
 DIM = (90, 105, 115)
@@ -14,11 +15,12 @@ BAD = (230, 80, 70)
 PANEL = (6, 10, 16, 210)
 
 HELP_LINES = [
-    "W/S — ход вперёд/назад     A/D — руль     Shift — форсаж",
-    "ЛКМ / Пробел — огонь по курсору     E (держать) — добыча",
-    "F — швартовка в порту     H — справка     F12 — скриншот     Esc — выход",
+    "W/S — ход вперёд/назад     A/D — руль     Shift — форсаж (тратит энергию)",
+    "ЛКМ / Пробел — пушки по курсору     ПКМ (держать на цели) — захват и пуск ракет, торпеды",
+    "1–3 — активные модули     E (держать) — добыча     F — порт     H — справка     Esc — выход",
     "",
     "Пелена гуще к северо-востоку, у Ока Девятки. Там дороже ресурсы и слабее сенсоры.",
+    "Электроника в Пелене ест больше энергии: если реактор не тянет — гаснут щиты и радар.",
     "Форсаж в Пелене оставляет налёт филаментов: корабль тяжелеет. Чистка — в порту.",
     "Скаты уходят на глубину — скоро Всплеск. Под Тиходонтом вас не видно, если идти тихо.",
 ]
@@ -74,24 +76,38 @@ class Hud:
         t = world.t
 
         # --- статус корабля
-        box = pygame.Rect(12, 12, 300, 150)
+        box = pygame.Rect(12, 12, 320, 196)
         self.panel(box)
-        name = p.cls.name
-        self.text(name, (22, 20), WARN if world.in_capsule else ACCENT)
-        self.bar(22, 46, 160, p.hull / p.cls.hull, (200, 90, 70), f"Корпус {int(p.hull)}/{int(p.cls.hull)}")
-        if p.cls.shield:
-            self.bar(22, 62, 160, p.shield / p.cls.shield, (70, 140, 210), f"Щиты {int(p.shield)}")
-        self.bar(22, 78, 160, p.fouling, (160, 90, 210), f"Налёт {int(p.fouling * 100)}%")
-        self.text(f"Скорость {int(p.speed)}  (макс {int(p.max_speed())})", (22, 94), DIM, self.small)
-        self.text(f"Кредиты: {cap.credits} КК", (22, 112), UI)
+        self.text(p.hull.name, (22, 20), WARN if world.in_capsule else ACCENT)
+        self.bar(22, 46, 160, p.hp / p.hull.hp, (200, 90, 70), f"Корпус {int(p.hp)}/{int(p.hull.hp)}")
+        if p.armor_max:
+            self.bar(22, 62, 160, p.armor / p.armor_max, (170, 150, 110), f"Броня {int(p.armor)}")
+        if p.shield_max:
+            self.bar(22, 78, 160, p.shield / p.shield_max, (70, 140, 210), f"Щит {int(p.shield)}")
+        if p.cap_max:
+            bal = p.power_balance(world.density_at(p.pos))
+            col = (230, 210, 90) if not p.brownout else BAD
+            self.bar(22, 94, 160, p.capacitor / p.cap_max, col, f"Энергия {bal:+.1f}/с")
+        self.bar(22, 110, 160, p.fouling, (160, 90, 210), f"Налёт {int(p.fouling * 100)}%")
+        self.text(f"Скорость {int(p.speed)}  (макс {int(p.max_speed())})  масса {int(p.mass)}", (22, 124), DIM,
+                  self.small)
+        x = 22
+        for k in SUBSYSTEMS:
+            v = p.subsystems[k]
+            col = DIM if v > 0.95 else WARN if v > 0.5 else BAD
+            r = self.text(f"{SUBSYSTEM_NAME[k][:4]} {int(v * 100)}", (x, 142), col, self.small)
+            x = r.right + 10
+        self.text(f"Кредиты: {cap.credits} КК", (22, 162), UI)
         cargo = f"Трюм: {int(world.cargo_used)}/{world.cargo_capacity}  (~{world.cargo_value()} КК)"
-        self.text(cargo, (22, 132), UI, self.small)
+        self.text(cargo, (22, 182), UI, self.small)
         y = box.bottom + 6
         if cap.debt:
             self.text(f"ДОЛЖНИК: {cap.debt} КК", (16, y), BAD)
             y += 20
         if cap.trauma:
             self.text("Травма: перезарядка и радар ослаблены", (16, y), WARN, self.small)
+
+        self._weapons(world)
 
         # --- миникарта
         self._minimap(world)
@@ -123,6 +139,14 @@ class Hud:
             hints.append(("Всплеск Пелены выжигает щиты", BAD))
         if world.events.modifier("accuracy", p.pos, t) > 0.2:
             hints.append(("Штиль: точность выше, сенсоры чище", ACCENT))
+        if p.brownout:
+            hints.append(("Энергия на нуле! Щиты гаснут, радар слепнет", BAD))
+        if p.utility_active("bioscreen"):
+            hints.append(("Био-экран: вас не видят", ACCENT))
+        if world.in_smoke(p.pos):
+            hints.append(("В дымовой завесе", ACCENT))
+        if any(pr.kind == "missile" and pr.target is p and not pr.lost for pr in world.projectiles):
+            hints.append(("Ракета на подлёте!", BAD))
         if p.fouling > 0.4:
             hints.append(("Корпус обрастает филаментами — сбавьте ход", WARN))
         node = min(world.nodes, key=lambda n: n.pos.distance_squared_to(p.pos), default=None)
@@ -142,9 +166,7 @@ class Hud:
             self.text(msg, (16, y), tuple(int(c * k) for c in UI), self.small)
             y -= 18
 
-        if docked:
-            self._dock(world)
-        elif self.show_help or t < self.help_until:
+        if not docked and (self.show_help or t < self.help_until):
             self._help()
 
     def _minimap(self, world):
@@ -174,32 +196,45 @@ class Hud:
         for i, line in enumerate(HELP_LINES):
             self.text(line, (rect.x + 14, rect.y + 12 + i * 20), UI if i < 3 else DIM, self.small)
 
-    def dock_options(self, world):
-        cap = world.captain
-        opts = [
-            ("1", f"Продать груз (+{world.cargo_value()} КК)"),
-            ("2", f"Ремонт корпуса ({world.repair_cost()} КК)"),
-            ("3", f"Очистить налёт ({C.CLEAN_COST} КК)"),
-        ]
-        for key, kind, label in (("4", "sensor", "Сенсоры"), ("5", "cargo", "Трюм +15"), ("6", "gun", "Орудия")):
-            cost = world.upgrade_cost(kind)
-            lvl = cap.upgrades[kind]
-            opts.append((key, f"{label} ур.{lvl} -> {lvl + 1} ({cost} КК)" if cost else f"{label}: максимум"))
-        for key, sk in (("7", "cruiser"), ("8", "barge"), ("9", "scout")):
-            cls = SHIP_CLASSES[sk]
-            mark = "  (текущий)" if world.player.cls.key == sk else ""
-            opts.append((key, f"Корабль: {cls.name} ({world.ship_cost(sk)} КК с обменом){mark}"))
-        opts.append(("0", f"Погасить долг ({cap.debt} КК)" if cap.debt else "Долгов нет"))
-        opts.append(("M", f"Лечение травмы ({C.MEDICAL_COST} КК)" if cap.trauma else "Здоров"))
-        return opts
-
-    def _dock(self, world):
-        w, h = 560, 380
-        rect = pygame.Rect((self.w - w) // 2, (self.h - h) // 2, w, h)
-        self.panel(rect)
-        self.text("ПОРТ БЕЖЕНЦЕВ", (rect.centerx, rect.y + 22), ACCENT, self.big, center=True)
-        for i, (key, label) in enumerate(self.dock_options(world)):
-            self.text(f"[{key}]  {label}", (rect.x + 24, rect.y + 50 + i * 24), UI)
-        if world.captain.debt:
-            self.text("Пока есть долг — покупки кораблей и модулей закрыты", (rect.centerx, rect.bottom - 44), BAD, self.small, center=True)
-        self.text("[F] / [Esc] — выйти в море", (rect.centerx, rect.bottom - 22), DIM, self.small, center=True)
+    def _weapons(self, world):
+        p = world.player
+        rows = len(p.weapons) + len([u for u in p.utilities if u.defn.active])
+        if rows == 0:
+            return
+        box = pygame.Rect(self.w - 312, self.h - 24 - rows * 20 - 16, 300, rows * 20 + 16)
+        self.panel(box)
+        y = box.y + 8
+        for m in p.weapons:
+            d = m.defn
+            ready = m.reload <= 0 and m.has_ammo
+            col = UI if ready else DIM
+            label = d.name.split("«")[0].strip() if "«" in d.name else d.name
+            label = f"{label} {SIZE_NAME[d.size]}"
+            self.text(label, (box.x + 10, y), col, self.small)
+            frac = 1.0 - (m.reload / (d.reload * p.reload_mult()) if d.reload else 0)
+            pygame.draw.rect(self.screen, (25, 35, 40), (box.x + 170, y + 4, 60, 6))
+            pygame.draw.rect(self.screen, ACCENT if ready else DIM, (box.x + 170, y + 4, int(60 * frac), 6))
+            info = ""
+            if d.ammo:
+                info = f"{m.ammo}/{d.ammo}"
+            if d.kind == "missile" and m.lock > 0:
+                info += f" захват {int(m.lock * 100)}%"
+            self.text(info, (box.x + 238, y), WARN if d.ammo and m.ammo == 0 else DIM, self.small)
+            y += 20
+        n = 0
+        for u in p.utilities:
+            if not u.defn.active:
+                continue
+            n += 1
+            if u.active_time > 0:
+                state, col = f"активен {u.active_time:.0f} с", ACCENT
+            elif u.cooldown > 0:
+                state, col = f"{u.cooldown:.0f} с", DIM
+            elif u.defn.charges and u.charges == 0:
+                state, col = "нет зарядов", WARN
+            else:
+                state, col = "готов", UI
+            charges = f" ×{u.charges}" if u.defn.charges else ""
+            self.text(f"[{n}] {u.defn.name}{charges}", (box.x + 10, y), col, self.small)
+            self.text(state, (box.x + 238, y), col, self.small)
+            y += 20
