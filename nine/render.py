@@ -21,6 +21,7 @@ from .gfx.ocean import FogOfWar, Ocean
 from .gfx.ship_art import ShipArt, nav_lights, window_lights
 from .gfx.wake import Wakes
 from .gfx import veil_fx as VF
+from .gfx import events_fx as EF
 from collections import deque
 from .ship import heading
 
@@ -108,6 +109,7 @@ class Renderer:
             self.islands.draw(screen, cam, isl, t, daylight)
         self.wakes.draw(screen, cam, t, daylight)
         VF.draw_surge_telegraphs(screen, cam, world, self.fx)
+        EF.draw_under(screen, cam, world, self.fx)
         self.ocean.draw_eye_under(screen, cam, world, self.fx)
         self.port.draw(screen, cam, world, self.font)
         self.fx.draw(screen, cam, "water")
@@ -173,6 +175,9 @@ class Renderer:
 
         # --- освещение
         ambient = ambient_color(world)
+        storm = EF.storm_strength(world)
+        if storm > 0:
+            ambient = P.mix(ambient, (110, 120, 140), 0.45 * storm)
         if self.fx.flash > 0:
             ambient = P.mix(ambient, (255, 255, 255), self.fx.flash)
         night = 1.0 - world.daylight()
@@ -194,6 +199,7 @@ class Renderer:
                 self._projectile_glow(pr)
         if night > 0.05:
             self._nav_lights(ships, night, t)
+        EF.draw_emissive(screen, cam, world, self.fx, night)
         self.motes.update(world, cam, dt)
         self.motes.draw(screen, cam, t, night, self.fx)
         self._shield_bubble(p, t)
@@ -204,6 +210,7 @@ class Renderer:
         self.ocean.draw_eye_over(screen, cam, world)
         self.ocean.draw_weather(screen, cam, world, self.fx)
         self.sky.draw(screen, dt, self.fx)
+        self.lightning = EF.draw_rain(screen, cam, world, self.fx, dt)
         self.fog.draw(screen, cam, p.pos, vis)
         if self.distortion and self.high_quality:
             VF.distort(screen, d_here, t)
@@ -261,6 +268,8 @@ class Renderer:
         for ev in world.events.active:
             if ev.phase(t) == "active" and ev.data.telegraphed_by_rays:
                 add(ev.pos, ev.data.radius, (120, 60, 170), 0.6)
+        for pos, r, col, k in EF.bloom_lights(world):
+            add(pos, r, col, k)
         return out
 
     def _halos(self, world, lights, night):
@@ -361,6 +370,16 @@ class Renderer:
             if ev.phase(world.t) != "active":
                 continue
             if world.player.pos.distance_to(ev.pos) - ev.data.radius > max(radar, world.visual_range()):
+                continue
+            if ev.data.shape == "band":
+                d, pp = ev.direction, ev.direction.rotate(90)
+                R, W = ev.data.radius, ev.data.width
+                corners = [ev.pos + d * a * R + pp * b * W for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+                for i in range(4):
+                    a, b = corners[i], corners[(i + 1) % 4]
+                    for k in range(0, 20, 2):
+                        pygame.draw.line(self.screen, P.shade(ev.data.color, 0.8), cam.w2s(a + (b - a) * k / 20),
+                                         cam.w2s(a + (b - a) * (k + 1) / 20), 1)
                 continue
             s = cam.w2s(ev.pos)
             r = cam.px(ev.data.radius)

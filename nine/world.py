@@ -186,7 +186,8 @@ class World:
         light = 1.0 - (1.0 - C.NIGHT_VISION) * night
         if self.spotlight and night > 0:
             light = max(light, 0.9)
-        return C.VISUAL_RANGE * (1.0 - 0.55 * self.density_at(self.player.pos)) * light
+        vision = self.events.multiplier("vision", self.player.pos, self.t)
+        return C.VISUAL_RANGE * (1.0 - 0.55 * self.density_at(self.player.pos)) * light * vision
 
     def sheltering_tihodont(self):
         for tx in self.tihodonts:
@@ -245,11 +246,14 @@ class World:
                 self.say(f"{ev.data.name}!")
                 if ev.data.name == "Штиль" and ev.covers(p.pos):
                     self.emit("sky")
+            if ev.data.name == "Цветение":
+                self._bloom_resources(ev)
 
         density = self.density_at(p.pos)
         p.cargo_mass = self.cargo_used
         p.reload_penalty = C.TRAUMA_RELOAD_MULT if self.captain.trauma else 1.0
         p.update(dt, ctl.throttle, ctl.turn, ctl.boost, density)
+        self._weather(p, dt)
         self._aground_cd = max(0.0, self._aground_cd - dt)
         impact = collide_ship(p, self.islands, self.rng)
         if impact > AGROUND_MIN_SPEED:
@@ -455,6 +459,7 @@ class World:
             if dodge:
                 turn, throttle = dodge, max(throttle, 0.6)
             s.update(dt, throttle, turn, False, d)
+            self._weather(s, dt)
             if collide_ship(s, self.islands, self.rng) > AGROUND_MIN_SPEED:
                 self.emit("aground", Vector2(s.pos), 60)
             dist = s.pos.distance_to(p.pos)
@@ -473,6 +478,24 @@ class World:
                         m.lock = 0.0
                         self.say("Ракета! Захват на вас.")
                     self.projectiles += shots
+
+    def _weather(self, ship, dt):
+        """Снос ветром и течением; удары волн в шторм."""
+        flow = self.events.flow(ship.pos, self.t)
+        if flow.length_squared() > 0:
+            ship.pos += flow * dt
+        waves = self.events.modifier("wave_damage", ship.pos, self.t)
+        if waves > 0 and self.rng.random() < 0.35 * dt:
+            ship.apply_damage(waves, "kinetic", self.rng)
+            if ship is self.player:
+                self.emit("wave", Vector2(ship.pos))
+
+    def _bloom_resources(self, ev):
+        """Цветение выносит на поверхность редкие ресурсы."""
+        for _ in range(6):
+            pos = ev.pos + Vector2(1, 0).rotate(self.rng.uniform(0, 360)) * self.rng.uniform(0, ev.data.radius * 0.8)
+            if not island_at(self.islands, pos, 60):
+                self.nodes.append(ResourceNode(pos, self.rng.choice(("filament", "condensate")), self.rng.uniform(20, 40)))
 
     def _update_phantoms(self, dt, density):
         """В плотной Пелене филаменты резонируют с мозгом: на радаре появляются несуществующие цели."""

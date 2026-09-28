@@ -247,3 +247,17 @@ def test_calm_start_near_player_opens_the_sky(world):
     world.events.spawn(CALM, world.player.pos, world.t)
     step(world, Controls(), 0.1)
     assert any(ev[0] == "sky" for ev in world.fx)
+
+
+def test_current_carries_ship_and_bloom_brings_rare_resources(world):
+    from nine.events import BLOOM, CURRENT
+    world.player.pos = Vector2(3000, 3000)
+    world.player.vel = Vector2()
+    world.events.spawn(CURRENT, world.player.pos, world.t, angle=0)
+    x0 = world.player.pos.x
+    step(world, Controls(), 3.0)
+    assert world.player.pos.x > x0 + 100
+    n = len(world.nodes)
+    world.events.spawn(BLOOM, Vector2(4000, 4000), world.t)
+    step(world, Controls(), 0.1)
+    assert len(world.nodes) >= n + 3

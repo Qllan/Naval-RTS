@@ -68,3 +68,20 @@ def test_density_grid_matches_pointwise_density():
     for j, y in enumerate(ys):
         for i, x in enumerate(xs):
             assert abs(grid[j, i] - v.density((x, y), t)) < 1e-9
+
+
+def test_band_event_covers_a_strip_and_pushes_along_it():
+    from nine.events import CURRENT, STORM
+    from pygame.math import Vector2
+    ev = EventDirector(first_delay=1e9)
+    e = ev.spawn(CURRENT, (0, 0), 0, angle=0)
+    t = e.start + 5
+    assert e.covers((1000, 0)) and not e.covers((0, 400))
+    f = ev.flow(Vector2(0, 0), t)
+    assert f.x > 50 and abs(f.y) < 1e-6
+    import numpy as np
+    xs, ys = np.array([0.0, 1000.0, 0.0]), np.array([0.0, 400.0])
+    grid = e.strength_grid(*np.meshgrid(xs, ys), t)
+    assert grid[0, 0] > 0.9 and grid[1, 0] == 0
+    s = ev.spawn(STORM, (5000, 5000), 0, angle=90)
+    assert ev.multiplier("vision", Vector2(5000, 5000), s.start + 5) < 0.7
