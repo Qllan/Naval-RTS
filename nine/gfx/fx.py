@@ -23,7 +23,7 @@ MAX_PARTICLES = 2200
 
 class Particle:
     __slots__ = ("pos", "vel", "life", "max_life", "size", "grow", "color", "color2", "kind", "drag", "layer",
-                 "angle")
+                 "angle", "spin", "image")
 
     def __init__(self, pos, vel, life, size, color, kind="dot", grow=0.0, color2=None, drag=0.0, layer="air",
                  angle=0.0):
@@ -38,6 +38,8 @@ class Particle:
         self.drag = drag
         self.layer = layer
         self.angle = angle
+        self.spin = 0.0
+        self.image = None
 
 
 def _glow_master(n=64):
@@ -165,6 +167,9 @@ class FX:
                     self.add(pos + self._rv(radius * 0.8), Vector2(), 0.3, 3, (160, 220, 255), "glow")
             elif kind == "lightning":
                 self.flash = 1.0
+            elif kind == "wreck" and self.art is not None:
+                _, ship, pal = ev
+                self._wreck(ship, pal)
 
     def _hit(self, pos, layer, dtype, pkind, ship):
         rng = self.rng
@@ -183,6 +188,27 @@ class FX:
         if layer == "hull":
             for _ in range(3):
                 self.add(pos, self._rv(40) + ship.vel * 0.5, 1.2, 2.5, P.SMOKE, "smoke", grow=9, drag=1.5)
+
+    art = None                     # ShipArt; подключает отрисовка
+
+    def _wreck(self, ship, pal):
+        """Корпус раскалывается: нос и корма расходятся, крутятся и тонут; обломки и масло."""
+        rng = self.rng
+        bow, stern = self.art.wreck_pieces(ship, pal)
+        fwd = Vector2(1, 0).rotate(ship.angle)
+        for img, sign in ((bow, 1), (stern, -1)):
+            p = Particle(ship.pos, ship.vel * 0.4 + fwd * sign * rng.uniform(10, 20), rng.uniform(6, 8), 1.0,
+                         (0, 0, 0), "sprite", drag=0.5, layer="water", angle=ship.angle)
+            p.spin = sign * rng.uniform(6, 16)
+            p.image = img
+            if len(self.particles) < self.max_particles + 50:
+                self.particles.append(p)
+        self.add(ship.pos, ship.vel * 0.2, 25.0, ship.radius * 1.4, (10, 10, 14), "slick", grow=2.0, drag=0.3,
+                 layer="water")
+        for _ in range(14):
+            self.add(ship.pos + self._rv(ship.radius), self._rv(40) + ship.vel * 0.3, rng.uniform(8, 16),
+                     rng.uniform(1.2, 2.6), rng.choice(((96, 72, 52), (70, 70, 74), (120, 100, 80))), "debris",
+                     drag=0.6, layer="water", angle=rng.uniform(0, 360))
 
     def _splash(self, pos, scale):
         rng = self.rng
@@ -264,6 +290,7 @@ class FX:
 
     def update(self, dt):
         keep = []
+        bubbles = []
         for p in self.particles:
             p.life -= dt
             if p.life <= 0:
@@ -272,8 +299,13 @@ class FX:
                 p.vel *= math.exp(-p.drag * dt)
             p.pos += p.vel * dt
             p.size += p.grow * dt
+            if p.spin:
+                p.angle += p.spin * dt
+            if p.kind == "sprite" and self.rng.random() < 7 * dt:         # пузыри от тонущего корпуса
+                bubbles.append(Particle(p.pos + self._rv(10), Vector2(), 0.7, 1.5, P.FOAM, "ring", grow=7,
+                                        layer="water"))
             keep.append(p)
-        self.particles = keep
+        self.particles = keep + bubbles[:max(0, self.max_particles - len(keep))]
         self.flash = max(0.0, self.flash - dt * 4)
 
     EMISSIVE = ("glow", "fire", "spark")
@@ -305,6 +337,21 @@ class FX:
             elif p.kind == "ring":
                 if r > 1:
                     pygame.draw.circle(screen, P.mix(P.OCEAN_MID, p.color, k), s, int(r), max(1, int(zoom * k * 2)))
+            elif p.kind == "sprite":
+                sink = round((0.55 + 0.45 * k) * 20) / 20
+                img = self.art.rotated(("wreck", id(p.image), sink), p.image, p.angle, zoom * sink)
+                a = int(255 * min(1.0, k * 1.6))
+                if a < 250:
+                    img = img.copy()
+                    img.set_alpha(a)
+                screen.blit(img, img.get_rect(center=s))
+            elif p.kind == "slick":
+                img = self.puff(p.color, r, 110 * min(1.0, k * 3))
+                screen.blit(img, img.get_rect(center=s))
+            elif p.kind == "debris":
+                d = Vector2(1, 0).rotate(p.angle + p.life * 20) * p.size * zoom
+                pygame.draw.line(screen, P.mix(P.OCEAN_MID, p.color, min(1.0, k * 3)), s - d, s + d,
+                                 max(1, int(zoom * 0.8)))
             elif p.kind == "arc":
                 rect = pygame.Rect(0, 0, r * 2, r * 2)
                 rect.center = s

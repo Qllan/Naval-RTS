@@ -11,9 +11,10 @@ from collections import OrderedDict
 import pygame
 from pygame.math import Vector2
 
+from ..hulls import HULLS
 from .palette import SHIP_PALETTES, mix, shade
 
-R = 4                    # пикселей на единицу в мастер-спрайте
+R = 6                    # пикселей на единицу в мастер-спрайте
 ANGLE_STEP = 2.0         # шаг кэша по углу, град
 ZOOM_STEP = 0.05
 CACHE_LIMIT = 5000
@@ -74,93 +75,250 @@ class _Canvas:
     def line(self, a, b, color, width=0.4):
         pygame.draw.line(self.surf, color, self.p(*a), self.p(*b), max(1, int(width * R)))
 
+    def _blend(self, rect, draw):
+        """Полупрозрачное рисование со смешиванием (draw.* на SRCALPHA перезаписывает альфу)."""
+        rect = pygame.Rect(rect).inflate(4, 4)
+        tmp = pygame.Surface(rect.size, pygame.SRCALPHA)
+        draw(tmp, rect.topleft)
+        self.surf.blit(tmp, rect.topleft)
+
     def circle(self, x, y, r, color, width=0):
-        pygame.draw.circle(self.surf, color, self.p(x, y), max(1, int(r * R)), int(width * R) if width else 0)
+        rad = max(1, int(r * R))
+        w = int(width * R) if width else 0
+        c = self.p(x, y)
+        if len(color) == 4 and color[3] < 255:
+            self._blend((c[0] - rad, c[1] - rad, rad * 2, rad * 2),
+                        lambda s, o: pygame.draw.circle(s, color, (c[0] - o[0], c[1] - o[1]), rad, w))
+        else:
+            pygame.draw.circle(self.surf, color, c, rad, w)
 
     def rect(self, x, y, lx, ly, color, width=0, radius=0.6):
         rr = pygame.Rect(0, 0, lx * R, ly * R)
         rr.center = self.p(x, y)
-        pygame.draw.rect(self.surf, color, rr, int(width * R) if width else 0, border_radius=int(radius * R))
+        w = int(width * R) if width else 0
+        if len(color) == 4 and color[3] < 255:
+            self._blend(rr, lambda s, o: pygame.draw.rect(s, color, rr.move(-o[0], -o[1]), w,
+                                                          border_radius=int(radius * R)))
+        else:
+            pygame.draw.rect(self.surf, color, rr, w, border_radius=int(radius * R))
         return rr
 
 
 # --- корпус -----------------------------------------------------------------
 
+def half_width(hull_key, x):
+    """Полуширина корпуса в точке x (интерполяция по профилю)."""
+    prof = PROFILES[hull_key]
+    if x >= prof[0][0] or x <= prof[-1][0]:
+        return 0.0
+    for (x0, y0), (x1, y1) in zip(prof, prof[1:]):
+        if x1 <= x <= x0:
+            t = (x0 - x) / (x0 - x1) if x0 != x1 else 0.0
+            return y0 + (y1 - y0) * t
+    return 0.0
+
+
+def _blocked(hull_key, x, y, pad=3.5):
+    """Занято ли место надстройкой или установкой оружия (чтобы не ставить туда мелочь)."""
+    for sx, sy, lx, ly, _ in SUPERSTRUCTURE.get(hull_key, []):
+        if abs(x - sx) < lx / 2 + 1 and abs(y - sy) < ly / 2 + 1:
+            return True
+    for slot in HULLS[hull_key].slots:
+        if slot.category == "weapon" and math.hypot(x - slot.pos[0], y - slot.pos[1]) < pad + 1:
+            return True
+    return False
+
+
 def build_hull(hull_key, pal_key, static_modules, damage_level):
     """Мастер-спрайт корпуса со статичными модулями и следами повреждений."""
     pal = SHIP_PALETTES[pal_key]
     pts = outline(hull_key)
-    extent = max(max(abs(x), abs(y)) for x, y in pts) + 8
+    extent = max(max(abs(x), abs(y)) for x, y in pts) + 10
     cv = _Canvas(extent)
     bow = PROFILES[hull_key][0][0]
     stern = PROFILES[hull_key][-1][0]
+    hw = max(y for _, y in PROFILES[hull_key])
+    small = hull_key == "capsule"
+    rng = random.Random(hash((hull_key, pal_key)) & 0xffffff)
+    pirate = pal_key == "pirate"
 
-    # борт, затенённая правая половина, планширь
-    cv.poly(pts, pal.hull)
-    cv.poly([(x, y) for x, y in pts if y >= 0] + [(stern, 0)], shade(pal.hull, 0.78))
-    cv.poly(pts, pal.trim, width=0.6)
+    # --- борт: ватерлиния (сурик), обшивка, затенение правого борта
+    cv.poly(pts, (116, 42, 36) if not pirate else (92, 44, 30))
+    inner = _scaled(pts, 0.985, 0.94)
+    cv.poly(inner, pal.hull)
+    cv.poly([(x, y) for x, y in inner if y >= 0] + [(stern * 0.985, 0)], shade(pal.hull, 0.8))
+    if not small:
+        # пояса обшивки и шпангоуты
+        for k in (0.9, 0.84):
+            cv.poly(_scaled(pts, 0.99, k), shade(pal.hull, 0.72), width=0.1)
+        x = stern + 1.5
+        while x < bow - 2:
+            h = half_width(hull_key, x)
+            for side in (-1, 1):
+                cv.line((x, side * h * 0.93), (x, side * h * 0.8), shade(pal.hull, 0.7), 0.1)
+                if rng.random() < 0.9:
+                    cv.circle(x + 0.6, side * h * 0.87, 0.12, shade(pal.hull, 1.35))
+            x += 2.4
+    cv.poly(pts, pal.trim, width=0.35)
 
-    # палуба с досками
+    # --- палуба: доски со стыками, леера
     deck = _scaled(pts, 0.9, 0.78)
-    cv.poly(deck, pal.deck)
-    half_w = max(y for _, y in PROFILES[hull_key]) * 0.78
-    y = -half_w + 1.6
+    half_w = hw * 0.78
+    # доски рисуем на отдельном слое и обрезаем по форме палубы
+    layer = _Canvas(extent)
+    layer.poly(deck, pal.deck)
+    y = -half_w + 1.1
+    row = 0
     while y < half_w:
-        cv.line((stern * 0.85, y), (bow * 0.8, y), pal.plank, 0.18)
-        y += 1.6
-    cv.poly(deck, shade(pal.deck, 0.7), width=0.25)
+        layer.line((stern, y), (bow, y), pal.plank, 0.1)
+        x = stern + (row % 3) * 2.3
+        while x < bow:
+            layer.line((x, y), (x, y + 1.1), pal.plank, 0.08)
+            x += 7
+        y += 1.1
+        row += 1
+    mask = pygame.Surface(layer.surf.get_size(), pygame.SRCALPHA)
+    pygame.draw.polygon(mask, (255, 255, 255, 255), [cv.p(x, y) for x, y in deck])
+    layer.surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    cv.surf.blit(layer.surf, (0, 0))
+    cv.poly(deck, shade(pal.deck, 0.65), width=0.25)
+    if not small:
+        rail = _scaled(pts, 0.86, 0.72)
+        cv.poly(rail, shade(pal.superstructure, 0.85), width=0.1)
+        for i in range(0, len(rail)):
+            cv.circle(*rail[i], 0.16, shade(pal.superstructure, 0.9))
 
-    # полоса стороны у носа
-    if hull_key != "capsule":
+    # --- полоса стороны, пиратские заплаты и таран
+    if not small:
         x0 = bow * 0.62
-        band = [(x0, -half_w * 0.9), (x0 + 2.2, -half_w * 0.6), (x0 + 2.2, half_w * 0.6), (x0, half_w * 0.9)]
+        hb = half_width(hull_key, x0) * 0.78
+        band = [(x0, -hb * 0.95), (x0 + 2.2, -hb * 0.7), (x0 + 2.2, hb * 0.7), (x0, hb * 0.95)]
         cv.poly(band, pal.accent)
-        if pal_key == "pirate":                       # «зубы» Прилива
-            for i in range(-2, 3):
-                cv.poly([(x0 + 2.2, i * 1.6 - 0.6), (x0 + 3.6, i * 1.6), (x0 + 2.2, i * 1.6 + 0.6)], pal.accent)
+    if pirate and not small:
+        for _ in range(9):
+            x = rng.uniform(stern * 0.8, bow * 0.6)
+            yy = rng.choice((-1, 1)) * rng.uniform(0.3, 0.8) * half_width(hull_key, x)
+            col = mix(pal.deck, (140, 70, 40), rng.uniform(0.2, 0.7))
+            cv.rect(x, yy, rng.uniform(1.5, 3.5), rng.uniform(1, 2.5), col, radius=0.1)
+            cv.rect(x, yy, rng.uniform(1.5, 3.5), rng.uniform(1, 2.5), shade(col, 0.6), width=0.08, radius=0.1)
+        for _ in range(7):
+            x = rng.uniform(stern * 0.8, bow * 0.7)
+            side = rng.choice((-1, 1))
+            h = half_width(hull_key, x)
+            cv.line((x, side * h * 0.95), (x - rng.uniform(0.5, 2), side * h * 0.7), (130, 66, 36), 0.25)
+        cv.poly([(bow - 1, -1.8), (bow + 3.5, 0), (bow - 1, 1.8)], (120, 110, 100))           # таран
+        cv.poly([(bow - 1, -1.8), (bow + 3.5, 0), (bow - 1, 1.8)], (60, 54, 50), width=0.15)
+        for i in range(-2, 3):                                                               # «зубы»
+            cv.poly([(x0 + 2.2, i * 1.6 - 0.6), (x0 + 3.6, i * 1.6), (x0 + 2.2, i * 1.6 + 0.6)], pal.accent)
 
-    # грузовые люки
+    # --- люки
     for hx, hy, lx, ly in HATCHES.get(hull_key, []):
         cv.rect(hx, hy, lx, ly, shade(pal.deck, 0.62), radius=0.4)
+        cv.rect(hx, hy, lx, ly, shade(pal.deck, 0.45), width=0.15, radius=0.4)
         for k in range(1, 4):
             cv.line((hx - lx / 2, hy - ly / 2 + k * ly / 4), (hx + lx / 2, hy - ly / 2 + k * ly / 4),
-                    shade(pal.deck, 0.5), 0.2)
+                    shade(pal.deck, 0.5), 0.15)
+
+    # --- носовое устройство: брашпиль, цепи, якоря
+    if not small:
+        wx = bow * 0.74
+        cv.rect(wx, 0, 1.4, 2.6, shade(pal.trim, 1.3), radius=0.2)
+        for side in (-1, 1):
+            cv.circle(wx, side * 0.9, 0.45, shade(pal.trim, 0.9))
+            hx = bow * 0.84
+            hy = side * half_width(hull_key, hx) * 0.75
+            for k in range(6):                                                    # звенья цепи
+                t = k / 5
+                cv.circle(wx + (hx - wx) * t, side * 0.9 + (hy - side * 0.9) * t, 0.14, (40, 40, 44))
+            ay = side * (half_width(hull_key, hx) + 0.4)
+            cv.line((hx - 0.8, ay), (hx + 0.8, ay), (46, 46, 50), 0.25)          # якорь
+            cv.line((hx, ay), (hx, ay + side * 0.9), (46, 46, 50), 0.2)
+
+    # --- основания башен
+    for slot in HULLS[hull_key].slots:
+        if slot.category != "weapon":
+            continue
+        r = 4.3 if slot.size > 1 else 3.1
+        cv.circle(*slot.pos, r, shade(pal.deck, 0.55))
+        cv.circle(*slot.pos, r, shade(pal.trim, 1.2), width=0.18)
+        cv.circle(*slot.pos, r * 0.75, shade(pal.deck, 0.42))
+
+    # --- вентиляторы и кнехты
+    if not small:
+        for fx_, fy_ in ((bow * 0.45, 0.5), (bow * 0.45, -0.5), (stern * 0.35, 0.55), (stern * 0.35, -0.55),
+                         (stern * 0.78, 0.45), (stern * 0.78, -0.45), (bow * 0.2, 0.6), (bow * 0.2, -0.6)):
+            vy = fy_ * half_width(hull_key, fx_)
+            if not _blocked(hull_key, fx_, vy):
+                cv.circle(fx_, vy, 0.7, shade(pal.superstructure, 0.8))
+                cv.circle(fx_, vy, 0.35, (26, 26, 30))
+        for bx in (bow * 0.35, stern * 0.55, stern * 0.85):
+            for side in (-1, 1):
+                by = side * half_width(hull_key, bx) * 0.7
+                cv.circle(bx, by, 0.3, shade(pal.trim, 1.6))
+                cv.circle(bx + 0.8, by, 0.3, shade(pal.trim, 1.6))
 
     _static_modules(cv, hull_key, pal, static_modules, bow, stern, half_w)
 
-    # надстройки
+    # --- надстройки: тень, корпус, крыша с оборудованием, крылья мостика, окна
     for sx, sy, lx, ly, windows in SUPERSTRUCTURE.get(hull_key, []):
-        cv.rect(sx + 0.5, sy + 0.7, lx, ly, shade(pal.trim, 0.8), radius=0.8)          # тень
+        cv.rect(sx + 0.6, sy + 0.8, lx, ly, (0, 0, 0, 90), radius=0.8)
+        if windows and not small:
+            cv.rect(sx + lx / 2 - 1, sy, 2, ly + 2.4, pal.superstructure, radius=0.3)          # крылья мостика
         cv.rect(sx, sy, lx, ly, pal.superstructure, radius=0.8)
-        cv.rect(sx - 0.4, sy - 0.4, lx - 1.6, ly - 1.8, pal.roof, radius=0.6)
+        cv.rect(sx - 0.3, sy - 0.3, lx - 1.4, ly - 1.4, pal.roof, radius=0.6)
+        cv.rect(sx - 0.3, sy - 0.3, lx - 1.4, ly - 1.4, shade(pal.roof, 0.75), width=0.12, radius=0.6)
+        if not small and lx > 5:
+            cv.rect(sx - lx * 0.2, sy - ly * 0.2, 1.4, 1.1, shade(pal.roof, 0.7), radius=0.1)     # кондиционер
+            cv.rect(sx - lx * 0.2, sy + ly * 0.2, 1.0, 1.0, shade(pal.roof, 1.2), radius=0.1)
+            cv.line((sx - lx * 0.35, sy + ly * 0.3), (sx - lx * 0.35 - 1.8, sy + ly * 0.3), (40, 40, 44), 0.1)
         if windows:
-            n = max(2, int(ly / 1.6))
+            n = max(2, int(ly / 1.3))
             for k in range(n):
                 wy = sy - ly / 2 + (k + 0.5) * ly / n
-                cv.rect(sx + lx / 2 - 0.5, wy, 0.7, ly / n * 0.6, pal.window, radius=0.1)
-    for fx, fy, r in FUNNELS.get(hull_key, []):
-        cv.circle(fx, fy, r, shade(pal.trim, 0.9))
-        cv.circle(fx, fy, r * 0.6, (20, 20, 22))
-        cv.circle(fx - r * 0.25, fy - r * 0.25, r * 0.25, shade(pal.superstructure, 0.9))
+                cv.rect(sx + lx / 2 - 0.45, wy, 0.6, ly / n * 0.62, pal.window, radius=0.1)
+            for side in (-1, 1):
+                for k in range(max(1, int(lx / 2.2))):
+                    cv.rect(sx - lx / 2 + 1 + k * 2.2, sy + side * (ly / 2 - 0.35), 0.8, 0.35,
+                            shade(pal.window, 0.75), radius=0.05)
+    for fx_, fy_, r in FUNNELS.get(hull_key, []):
+        cv.circle(fx_ + 0.5, fy_ + 0.6, r, (0, 0, 0, 80))
+        cv.circle(fx_, fy_, r, shade(pal.trim, 0.9))
+        cv.circle(fx_, fy_, r, pal.accent, width=0.3)
+        cv.circle(fx_, fy_, r * 0.65, (18, 18, 20))
+        for k in (-1, 0, 1):
+            cv.line((fx_ - r * 0.5, fy_ + k * r * 0.25), (fx_ + r * 0.5, fy_ + k * r * 0.25), (46, 46, 48), 0.1)
     for lx, ly in LIFEBOATS.get(hull_key, []):
         for side in (-1, 1):
-            by = side * (half_w - 0.8)
+            by = side * (half_width(hull_key, lx) * 0.78 - 0.9)
+            for dx in (-1.4, 1.4):
+                cv.line((lx + dx, by), (lx + dx, by - side * 1.2), (60, 60, 64), 0.15)          # шлюпбалки
             cv.rect(lx, by, 4, 1.4, (215, 120, 60), radius=0.7)
+            cv.line((lx - 1.6, by), (lx + 1.6, by), (240, 170, 110), 0.12)
+
+    # --- мачта с реем и такелаж
     mx, my = MAST.get(hull_key, (0, 0))
+    if not small:
+        yard = half_width(hull_key, mx) * 0.55
+        rig = shade(pal.deck, 0.55)
+        for tx_, ty_ in ((bow - 1, 0), (stern + 1, 0), (mx, -half_width(hull_key, mx) * 0.9),
+                         (mx, half_width(hull_key, mx) * 0.9)):
+            cv.line((mx, my), (tx_, ty_), rig, 0.07)
+        cv.line((mx, -yard), (mx, yard), shade(pal.trim, 1.1), 0.22)
     cv.circle(mx, my, 0.9, shade(pal.trim, 1.2))
 
-    # кнехты по бортам
-    if hull_key not in ("capsule",):
-        for bx in (bow * 0.35, stern * 0.6):
-            for side in (-1, 1):
-                cv.circle(bx, side * half_w * 0.92, 0.35, shade(pal.trim, 1.6))
+    # --- грязь и износ
+    for _ in range(25 if not small else 5):
+        x = rng.uniform(stern * 0.9, bow * 0.8)
+        yy = rng.uniform(-1, 1) * half_width(hull_key, x) * 0.8
+        r = rng.uniform(0.3, 1.1)
+        cv.circle(x, yy, r, (20, 18, 16, rng.randint(18, 40)))
 
     _damage(cv, hull_key, damage_level, pts, half_w, bow, stern)
 
     shadow = pygame.Surface(cv.surf.get_size(), pygame.SRCALPHA)
     pygame.draw.polygon(shadow, (0, 0, 0, 120), [cv.p(x, y) for x, y in pts])
-    small = pygame.transform.smoothscale(shadow, (shadow.get_width() // 6, shadow.get_height() // 6))
-    shadow = pygame.transform.smoothscale(small, shadow.get_size())
+    small_s = pygame.transform.smoothscale(shadow, (shadow.get_width() // 6, shadow.get_height() // 6))
+    shadow = pygame.transform.smoothscale(small_s, shadow.get_size())
     return cv.surf, shadow
 
 
@@ -224,47 +382,71 @@ def _damage(cv, hull_key, level, pts, half_w, bow, stern):
 # --- турели ------------------------------------------------------------------
 
 def build_turret(module_key, pal_key):
+    """Башня/установка: ствол вдоль +X. Детали: погон, люки, дульные тормоза, дальномер."""
     pal = SHIP_PALETTES[pal_key]
-    cv = _Canvas(9)
-    body, dark = pal.turret, shade(pal.turret, 0.55)
+    cv = _Canvas(10)
+    body, dark = pal.turret, shade(pal.turret, 0.5)
     light = shade(pal.turret, 1.3)
+    edge = shade(pal.turret, 0.7)
     if module_key == "autocannon_s":
-        cv.rect(4, 0, 7, 1.1, dark, radius=0.3)
-        cv.rect(7.6, 0, 1.2, 1.6, dark, radius=0.2)
-        cv.circle(0, 0, 2.6, body)
-        cv.circle(-0.5, -0.5, 1.1, light)
+        cv.rect(4.2, 0, 7.4, 1.0, dark, radius=0.3)
+        cv.rect(7.9, 0, 1.4, 1.5, shade(dark, 0.8), radius=0.2)                 # дульный тормоз
+        cv.rect(2.2, 0, 1.6, 1.5, edge, radius=0.2)                              # кожух
+        cv.circle(0, 0, 2.7, edge)
+        cv.circle(0, 0, 2.4, body)
+        cv.circle(-0.6, -0.7, 0.9, light)                                        # люк
+        cv.circle(-0.9, 1.0, 0.35, dark)
     elif module_key == "scatter_s":
-        for a in (-12, 0, 12):
+        for a in (-14, 0, 14):
             d = Vector2(1, 0).rotate(a)
-            cv.line((d.x * 1.5, d.y * 1.5), (d.x * 5.5, d.y * 5.5), dark, 1.0)
-        cv.circle(0, 0, 2.8, body)
-        cv.circle(-0.6, -0.6, 1.2, light)
+            cv.line((d.x * 1.4, d.y * 1.4), (d.x * 5.6, d.y * 5.6), dark, 1.0)
+            cv.circle(d.x * 5.6, d.y * 5.6, 0.55, shade(dark, 0.8))
+        cv.circle(0, 0, 3.0, edge)
+        cv.circle(0, 0, 2.7, body)
+        cv.rect(-0.8, 0, 2.2, 3.2, light, radius=0.6)
     elif module_key == "cannon_m":
-        for y in (-1.1, 1.1):
-            cv.rect(6, y, 9, 1.1, dark, radius=0.3)
-        cv.rect(0, 0, 7.5, 7, body, radius=2.2)
-        cv.rect(-0.6, -0.6, 4.5, 4.2, light, radius=1.4)
-        cv.rect(-2.8, 0, 1.6, 5.5, shade(body, 0.8), radius=0.5)
+        for y in (-1.15, 1.15):
+            cv.rect(6.6, y, 9.6, 1.05, dark, radius=0.3)
+            cv.rect(11.0, y, 1.2, 1.4, shade(dark, 0.8), radius=0.2)             # дульные тормоза
+            cv.rect(3.6, y, 1.8, 1.5, edge, radius=0.3)                          # маски стволов
+        cv.rect(-0.2, 0, 8.4, 7.6, edge, radius=2.4)
+        cv.rect(-0.2, 0, 7.8, 7.0, body, radius=2.2)
+        cv.rect(-0.9, -0.7, 4.6, 4.0, light, radius=1.3)
+        cv.rect(-3.0, 0, 1.4, 5.8, shade(body, 0.8), radius=0.4)                 # задняя ниша
+        for side in (-1, 1):
+            cv.rect(-0.5, side * 4.2, 1.8, 0.9, edge, radius=0.3)               # «уши» дальномера
+        cv.circle(0.6, -1.9, 0.55, dark)                                         # командирский люк
+        cv.circle(0.6, 1.9, 0.45, dark)
     elif module_key == "em_m":
-        cv.rect(5, 0, 7, 1.6, dark, radius=0.5)
-        for k in range(3):
-            cv.circle(3 + k * 2, 0, 1.3, (90, 150, 210), width=0.35)
-        cv.circle(8.8, 0, 1.0, (160, 220, 255))
-        cv.circle(0, 0, 3.4, body)
-        cv.circle(-0.6, -0.6, 1.4, (120, 180, 230))
+        cv.rect(5.2, 0, 7.4, 1.8, dark, radius=0.6)
+        for k in range(4):
+            cv.circle(2.8 + k * 1.8, 0, 1.35, (90, 150, 210), width=0.3)
+        cv.circle(9.2, 0, 1.1, (170, 225, 255))
+        cv.circle(0, 0, 3.6, edge)
+        cv.circle(0, 0, 3.3, body)
+        cv.circle(-0.6, -0.6, 1.5, (110, 170, 225))
+        cv.circle(-0.6, -0.6, 0.7, (200, 235, 255))
     elif module_key in ("missile_s", "missile_m"):
         n = 2 if module_key == "missile_s" else 3
-        size = 5.5 if n == 2 else 7.5
-        cv.rect(0, 0, size, size, body, radius=0.8)
-        cv.rect(-0.4, -0.4, size - 1.6, size - 1.6, light, radius=0.6)
+        size = 5.6 if n == 2 else 7.8
+        cv.rect(0.3, 0.3, size, size, (0, 0, 0, 90), radius=0.8)
+        cv.rect(0, 0, size, size, edge, radius=0.8)
+        cv.rect(0, 0, size - 0.5, size - 0.5, body, radius=0.7)
+        cv.rect(-0.4, -0.4, size - 1.8, size - 1.8, light, radius=0.5)
         step = size / n
         for i in range(n):
             for j in range(n):
-                cv.circle(-size / 2 + step * (i + 0.5), -size / 2 + step * (j + 0.5), step * 0.3, (30, 30, 34))
+                cx, cy = -size / 2 + step * (i + 0.5), -size / 2 + step * (j + 0.5)
+                cv.circle(cx, cy, step * 0.34, (28, 28, 32))
+                cv.circle(cx, cy, step * 0.18, (200, 70, 50))                    # головки ракет
     elif module_key == "torpedo_m":
-        cv.rect(0, 0, 11, 3.2, body, radius=1.5)
-        cv.rect(-0.3, -0.5, 9.5, 1.3, light, radius=0.6)
-        cv.circle(5.2, 0, 1.2, (20, 24, 30))
+        cv.rect(0.4, 0.4, 11.5, 3.4, (0, 0, 0, 90), radius=1.6)
+        cv.rect(0, 0, 11.5, 3.4, edge, radius=1.6)
+        cv.rect(0, 0, 11, 2.9, body, radius=1.4)
+        cv.rect(-0.3, -0.5, 9.5, 1.1, light, radius=0.5)
+        for k in (-3, 0, 3):
+            cv.line((k, -1.45), (k, 1.45), dark, 0.18)                           # бандажи
+        cv.circle(5.4, 0, 1.2, (18, 22, 28))
     else:
         cv.circle(0, 0, 2.5, body)
     return cv.surf
@@ -302,6 +484,23 @@ class ShipArt:
             m = self.masters[key] = build_hull(ship.hull.key, pal_key, static, dmg)
         return key, m
 
+    def wreck_pieces(self, ship, pal_key):
+        """Две половины разбитого корпуса (нос и корма) — мастер-спрайты того же размера."""
+        static = tuple((m.key, m) for _, _, m in ship.modules() if m.category in ("armor", "engine", "utility"))
+        hull_img, _ = build_hull(ship.hull.key, pal_key, static, 2)
+        w, h = hull_img.get_size()
+        cut = w // 2 + int(R * 2)
+        bow = hull_img.copy()
+        bow.fill((0, 0, 0, 0), (0, 0, cut, h))
+        stern = hull_img.copy()
+        stern.fill((0, 0, 0, 0), (cut, 0, w - cut, h))
+        for piece in (bow, stern):                    # тёмный рваный край
+            piece.fill((150, 140, 140, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        return bow, stern
+
+    def rotated(self, key, master, angle, zoom):
+        return self._rotated(key, master, angle, zoom)
+
     def draw(self, screen, cam, ship, pal_key, t=0.0, alpha=255, shadow=Vector2(3, 4)):
         """shadow — смещение тени в пикселях (по солнцу); None — без тени (ночь)."""
         key, (hull_img, shadow_img) = self._hull_master(ship, pal_key)
@@ -329,7 +528,14 @@ class ShipArt:
             if alpha < 255:
                 timg = timg.copy()
                 timg.set_alpha(alpha)
-            screen.blit(timg, timg.get_rect(center=cam.w2s(w.world_pos(ship))))
+            pos = cam.w2s(w.world_pos(ship))
+            if w.defn.kind == "gun" and w.defn.reload > 0:
+                # откат: сразу после выстрела установка «отскакивает» назад
+                k = w.reload / (w.defn.reload * ship.reload_mult())
+                kick = max(0.0, (k - 0.7) / 0.3)
+                if kick > 0:
+                    pos = pos - Vector2(1, 0).rotate(ang) * cam.px(kick * (1.4 if w.defn.size > 1 else 0.7))
+            screen.blit(timg, timg.get_rect(center=pos))
             if w.overheated or w.heat > 70:
                 glow = min(1.0, w.heat / 100)
                 pygame.draw.circle(screen, mix((120, 40, 20), (255, 120, 40), glow), cam.w2s(w.world_pos(ship)),

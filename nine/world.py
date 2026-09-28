@@ -508,6 +508,7 @@ class World:
             self.pirates.remove(pi)
             self.captain.kills += 1
             self.emit("explosion", Vector2(pi.ship.pos), 3)
+            self.emit("wreck", pi.ship, "pirate")
             kind = self.rng.choice(["salt", "condensate", "condensate", "filament"])
             loot = Loot(Vector2(pi.ship.pos), {kind: self.rng.randint(3, 8)}, self.rng.randint(40, 90))
             mods = [k for k in pi.ship.fit if k]
@@ -547,6 +548,8 @@ class World:
         cap = self.captain
         pos = Vector2(self.player.pos)
         self.emit("explosion", pos, 3 if not self.in_capsule else 1)
+        if not self.in_capsule:
+            self.emit("wreck", self.player, "player")
         if self.in_capsule:
             cap.debt += C.CAPSULE_DEBT
             cap.trauma = True

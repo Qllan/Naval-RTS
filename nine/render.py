@@ -27,6 +27,7 @@ class Renderer:
         self.cam = Camera(self.w, self.h)
         self.art = ShipArt()
         self.fx = FX()
+        self.fx.art = self.art
         self.ocean = Ocean()
         self.fog = FogOfWar(self.w, self.h)
         self.font = pygame.font.Font(None, 20)
