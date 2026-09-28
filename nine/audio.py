@@ -242,6 +242,8 @@ class Audio:
                 self.play("rock", ev[1], me, 0.6)
             elif kind in ("wave", "aground"):
                 self.play("wave", ev[1], me, 0.8)
+            elif kind == "spout":
+                self.play("splash", ev[1], me, 0.45)
             elif kind == "ecm":
                 self.play("em", ev[1], me, 1.0)
             elif kind == "coin":

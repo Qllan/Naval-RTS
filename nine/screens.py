@@ -136,12 +136,21 @@ class MainMenu(Screen):
         super().__init__(game)
         self.pauses = can_resume        # при запуске мир за меню живёт (корабль стоит у порта)
         items = []
+        from .save import has_save
         if can_resume:
             items.append(("Продолжить", self.close))
+        elif has_save():
+            items.append(("Продолжить (сохранение)", self.load))
         items += [("Новая игра", self.new_game), ("Кодекс", lambda: game.push(CodexScreen(game))),
                   ("Настройки", lambda: game.push(SettingsScreen(game))), ("Выход", game.quit)]
         self.menu = Menu(items, self.sound)
         self.can_resume = can_resume
+
+    def load(self):
+        if self.game.load_game():
+            self.close()
+        else:
+            self.sound("ui_error")
 
     def new_game(self):
         if self.can_resume:
@@ -769,3 +778,172 @@ class CodexScreen(Screen):
                 ui.text(s, "· " + line, (tx, y), ui.DIM, 17)
                 y += 20
         ui.text(s, "W/S или мышь — выбор   K / Esc — закрыть", (tx, r.bottom - 26), ui.DIM, 15)
+
+
+# --- подсказка при первом открытии ------------------------------------------------------
+
+class Tip:
+    """Плашка внизу по центру. Закрывается кликом, любой клавишей или сама через 12 с."""
+
+    def __init__(self, game, text):
+        self.game = game
+        self.text = text
+        self.age = 0.0
+        self.done = False
+        self.rect = pygame.Rect(0, 0, 0, 0)
+
+    def handle(self, e):
+        if self.age < 0.4:
+            return False
+        if e.type == pygame.MOUSEBUTTONDOWN and self.rect.collidepoint(e.pos):
+            self.done = True
+            return True
+        if e.type == pygame.KEYDOWN and e.key in (pygame.K_RETURN, pygame.K_SPACE):
+            self.done = True
+            return True
+        return False
+
+    def update(self, dt):
+        self.age += dt
+        if self.age > 12:
+            self.done = True
+
+    def draw(self):
+        s = self.game.screen
+        w, h = s.get_size()
+        lines = ui.wrap(self.text, 560, 17)
+        k = ease(self.age / 0.25) * min(1.0, (12 - self.age) / 0.5)
+        r = pygame.Rect(0, 0, 600, 44 + 19 * len(lines))
+        r.midbottom = (w // 2, h - 60 + int((1 - k) * 20))
+        self.rect = r
+        ui.panel(s, r, "Подсказка", ui.C_ENERGY)
+        for i, line in enumerate(lines):
+            ui.text(s, line, (r.x + 16, r.y + 28 + i * 19), ui.TEXT, 17)
+        ui.text(s, "клик или Enter — понятно  ·  отключить: Настройки → Интерфейс", (r.right - 12, r.bottom - 16),
+                ui.DIM, 13, anchor="topright")
+
+
+# --- отладочная консоль -----------------------------------------------------------------
+
+CONSOLE_HELP = [
+    "credits N — выдать кредиты          tp port|eye|X Y — телепорт",
+    "spawn [gunner|brawler|rocketeer|hunter] [N] — рейдеры рядом",
+    "event surge|calm|storm|bloom|current — событие у корабля",
+    "time ЧЧ — время суток               god — неуязвимость вкл/выкл",
+    "fauna N — Тиходонты рядом           reveal — открыть карту и кодекс",
+    "heal — починить всё                 goals — выполнить цели обучения",
+]
+
+
+class Console(Screen):
+    """` или F1: отладочная консоль. Мир на паузе."""
+
+    def __init__(self, game):
+        super().__init__(game)
+        self.line = ""
+        self.out = ["Консоль отладки. help — список команд, Esc — закрыть."]
+        pygame.key.start_text_input()
+
+    def close(self):
+        pygame.key.stop_text_input()
+        super().close()
+
+    def handle(self, e):
+        if e.type == pygame.KEYDOWN:
+            if e.key in (pygame.K_ESCAPE, pygame.K_BACKQUOTE, pygame.K_F1):
+                self.close()
+            elif e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                cmd, self.line = self.line.strip(), ""
+                if cmd:
+                    self.out.append("> " + cmd)
+                    try:
+                        self.out += self.run(cmd)
+                    except (ValueError, IndexError, KeyError) as err:
+                        self.out.append(f"ошибка: {err}")
+                self.out = self.out[-14:]
+            elif e.key == pygame.K_BACKSPACE:
+                self.line = self.line[:-1]
+        elif e.type == pygame.TEXTINPUT and e.text not in "`ё":
+            self.line += e.text
+
+    def run(self, cmd):
+        from .ai import PIRATE_LOADOUTS, Pirate, Tihodont
+        from .events import EVENTS
+        world = self.game.world
+        p = world.player
+        args = cmd.split()
+        name = args[0].lower()
+        if name == "help":
+            return list(CONSOLE_HELP)
+        if name == "credits":
+            n = int(args[1]) if len(args) > 1 else 1000
+            world.captain.credits += n
+            return [f"+{n} КК, всего {world.captain.credits}"]
+        if name == "tp":
+            if args[1] == "port":
+                p.pos = world.port + Vector2(0, -260)
+            elif args[1] == "eye":
+                p.pos = world.eye + Vector2(0, C.EYE_WALL_R + 300)
+            else:
+                p.pos = Vector2(float(args[1]), float(args[2]))
+            p.vel = Vector2()
+            self.game.renderer.cam.snap(p.pos)
+            return [f"телепорт: {int(p.pos.x)}, {int(p.pos.y)}"]
+        if name == "spawn":
+            kind = args[1] if len(args) > 1 else "gunner"
+            if kind not in PIRATE_LOADOUTS:
+                return ["виды: " + ", ".join(PIRATE_LOADOUTS)]
+            n = int(args[2]) if len(args) > 2 else 1
+            for i in range(n):
+                pos = p.pos + Vector2(1, 0).rotate(world.rng.uniform(0, 360)) * 600
+                world.pirates.append(Pirate(pos, world.rng, kind))
+            return [f"рейдеров: {n} ({kind})"]
+        if name == "event":
+            keys = {"surge": 0, "calm": 1, "storm": 2, "bloom": 3, "current": 4}
+            data = EVENTS[keys[args[1]]]
+            world.events.spawn(data, Vector2(p.pos), world.t)
+            return [f"событие: {data.name}"]
+        if name == "time":
+            hours = float(args[1])
+            want = (hours / 24.0) % 1.0
+            world.clock_offset += ((want - world.time_of_day) % 1.0) * C.DAY_LENGTH
+            return [f"время: {world.clock()}"]
+        if name == "god":
+            world.god = not world.god
+            return ["неуязвимость " + ("включена" if world.god else "выключена")]
+        if name == "fauna":
+            n = int(args[1]) if len(args) > 1 else 3
+            for _ in range(n):
+                world.tihodonts.append(Tihodont(p.pos + Vector2(1, 0).rotate(world.rng.uniform(0, 360)) * 500,
+                                                world.rng))
+            return [f"Тиходонтов рядом: +{n}"]
+        if name == "reveal":
+            world.memory[:, :] = 1.0
+            from .codex import all_keys
+            for k in all_keys():
+                world.codex.setdefault(k, False)
+            return ["карта и кодекс открыты"]
+        if name == "heal":
+            p.repair_all()
+            p.fouling = 0.0
+            p.recharge()
+            return ["корабль как новый"]
+        if name == "goals":
+            from .world import GOALS
+            for k, _, _ in GOALS:
+                world.complete(k)
+            return ["цели обучения выполнены"]
+        return [f"неизвестная команда: {name} (help — список)"]
+
+    def draw(self):
+        s = self.screen
+        h = 22 * 16 + 20
+        r = pygame.Rect(0, int(-h * (1 - self.k)), self.w, h)
+        ui.panel(s, r, "Консоль", ui.WARN, bg=(4, 6, 10, 235))
+        y = r.bottom - 36 - len(self.out) * 20
+        for line in self.out:
+            col = ui.TEXT if line.startswith(">") else ui.WARN if line.startswith("ошибка") else ui.DIM
+            ui.text(s, line, (r.x + 16, y), col, 17)
+            y += 20
+        caret = "_" if int(self.age * 2) % 2 == 0 else " "
+        ui.text(s, "> " + self.line + caret, (r.x + 16, r.bottom - 28), ui.ACCENT, 19, True)

@@ -11,7 +11,8 @@ from .gfx import ui
 from .hud import Hud
 from .port_ui import PortUI
 from .render import Renderer
-from .screens import CodexScreen, DeathScreen, MainMenu, MapScreen, PauseMenu
+from . import save as saves
+from .screens import CodexScreen, Console, DeathScreen, MainMenu, MapScreen, PauseMenu, Tip
 from .settings import Settings
 from .world import Controls, World
 
@@ -46,6 +47,8 @@ class Game:
         self._seen_loss = None
         self._death_timer = 0.0
         self._fps = 60.0
+        self.played = False         # сохраняем только если действительно играли
+        self.tip = None
         self.apply_settings()
         if menu:
             self.push(MainMenu(self))
@@ -69,7 +72,33 @@ class Game:
         self.running = False
 
     def new_game(self):
-        self.world = World(random.randrange(1, 10_000))
+        self._set_world(World(random.randrange(1, 10_000)))
+
+    def load_game(self):
+        world = saves.load()
+        if world is None:
+            return False
+        self._set_world(world)
+        self.played = True
+        self.world.say("Сохранение загружено.")
+        return True
+
+    def save_game(self):
+        if self.played:
+            try:
+                saves.save(self.world)
+            except OSError:
+                self.world.say("Не удалось сохранить игру.", "bad")
+
+    def show_tip(self, key, text):
+        """Контекстная подсказка при первом открытии экрана (отключается в настройках)."""
+        if self.settings.hints and key not in self.settings.seen_tips:
+            self.settings.seen_tips.append(key)
+            self.settings.save()
+            self.tip = Tip(self, text)
+
+    def _set_world(self, world):
+        self.world = world
         self.hud = Hud(self.screen, self.world)
         self.renderer = Renderer(self.screen)
         self.docked = False
@@ -123,12 +152,15 @@ class Game:
                 path = f"screenshot_{int(time.time())}.png"
                 pygame.image.save(self.screen, path)
                 self.world.say(f"Скриншот: {path}")
+            elif self.tip and self.tip.handle(e):
+                pass
             elif self.stack:
                 self.stack[-1].handle(e)
             elif self.docked:
                 if self.port_ui.handle_event(e, self.world) == "leave":
                     self.docked = False
                     self.world.undock()
+                    self.save_game()
             else:
                 self.handle_sea_event(e)
 
@@ -146,12 +178,16 @@ class Game:
             if key == pygame.K_ESCAPE:
                 self.audio.ui("ui_click")
                 self.push(PauseMenu(self))
+            elif key in (pygame.K_BACKQUOTE, pygame.K_F1):
+                self.push(Console(self))
             elif key == k("help"):
                 self.hud.show_help = not self.hud.show_help
                 self.hud.help_until = 0
             elif key == k("map"):
                 self.audio.ui("ui_click")
                 self.push(MapScreen(self))
+                self.show_tip("map", "Карта: ЛКМ — путевая точка (стрелка появится на HUD), ПКМ — убрать. "
+                                     "В плотной Пелене разведанное выцветает — это амнезия.")
             elif key == k("codex"):
                 self.audio.ui("ui_click")
                 self.push(CodexScreen(self))
@@ -161,6 +197,9 @@ class Game:
                 self.hud.help_until = 0
                 self.world.dock()
                 self.port_ui.reset()
+                self.save_game()
+                self.show_tip("port", "Порт: всё кликабельно. R — починить и пополнить всё, P — продать груз. "
+                                      "В «Оснащении» модули можно перетаскивать в слоты мышью.")
             elif key == k("ammo"):
                 self.pending_ammo = True
             elif key == k("spotlight"):
@@ -193,6 +232,8 @@ class Game:
     def step(self, dt):
         paused = self.paused
         if not self.docked and not paused:
+            if not self.stack:
+                self.played = True
             self.world.update(dt, Controls() if self.stack else self.controls())
             self._check_loss(dt)
         for s in self.stack:
@@ -206,6 +247,11 @@ class Game:
             self.hud.draw(self.world, self.docked, self.renderer.cam, self.renderer.last_events)
         for s in self.stack:
             s.draw()
+        if self.tip:
+            self.tip.update(dt)
+            self.tip.draw()
+            if self.tip.done:
+                self.tip = None
         if self.settings.show_fps:
             self._fps += (1 / max(dt, 1e-3) - self._fps) * 0.05
             ui.text(self.screen, f"{self._fps:3.0f} FPS", (self.screen.get_width() // 2, self.screen.get_height() - 18),
@@ -228,4 +274,5 @@ class Game:
             self.step(dt)
             pygame.display.flip()
         self.settings.save()
+        self.save_game()
         pygame.quit()

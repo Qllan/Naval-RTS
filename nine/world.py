@@ -27,6 +27,14 @@ LOCK_PICK_RADIUS = 260.0        # насколько близко к курсо�
 FIRE_CONTROL_RADIUS = 140.0     # цель ближе к курсору — турели сами берут упреждение
 AMMO_PACK = 100                 # снарядов в одной покупке
 LEAK_REPAIR_COST = 40
+# Обучение: первые цели (ключ, текст). Трекер на HUD показывает первую невыполненную.
+GOALS = (
+    ("mine", "Добыть ресурс", "Остановитесь у светящегося скопления и держите E"),
+    ("sell", "Продать груз", "Вернитесь в порт (F) и продайте добычу (P)"),
+    ("mist", "Заглянуть во Мглу", "Пелена гуще к северо-востоку. Следите за энергией"),
+    ("install", "Поставить новый модуль", "Порт → Оснащение: перетащите модуль в слот"),
+    ("sink", "Потопить рейдера", "Ржавый Прилив патрулирует Мглу. ЛКМ — огонь"),
+)
 MEMORY_CELL = 200               # клетка «памяти» карты, ед.
 AMNESIA_RATE = 0.05             # скорость забывания карты в самой плотной Пелене, доля/с
 
@@ -61,6 +69,7 @@ class Captain:
 
 class World:
     def __init__(self, seed=9, first_event=45.0):
+        self.seed = seed
         self.rng = random.Random(seed)
         self.t = 0.0
         self.veil = Veil(seed)
@@ -105,6 +114,9 @@ class World:
         self.marks = {"port": {"pos": Vector2(self.port), "label": "Порт беженцев", "kind": "port", "clarity": 1.0}}
         self.waypoint = None
         self.codex = {}             # ключ записи → прочитана ли
+        self.goals_done = set()
+        self.clock_offset = 0.0     # сдвиг суток (консоль: time)
+        self.god = False            # консоль: неуязвимость
         self.last_loss = None       # сводка для экрана гибели
         self._memory_cd = 0.0
         for key in ("port", "veil", "ray", "tihodont"):
@@ -195,7 +207,7 @@ class World:
     @property
     def time_of_day(self):
         """0..1: 0 — полночь, 0.25 — рассвет, 0.5 — полдень, 0.75 — закат."""
-        return (C.START_TIME_OF_DAY + self.t / C.DAY_LENGTH) % 1.0
+        return (C.START_TIME_OF_DAY + (self.t + self.clock_offset) / C.DAY_LENGTH) % 1.0
 
     def sun_elevation(self):
         return math.sin(2 * math.pi * (self.time_of_day - 0.25))
@@ -320,10 +332,29 @@ class World:
         self.smokes = [s for s in self.smokes if s.life > 0]
 
         self._update_memory(dt, density)
+        if self.god:
+            p.hp = p.hull.hp
+            p.fires = p.leaks = 0
+            p.water = 0.0
         if not p.alive:
             self._on_player_destroyed()
 
     # --- память, карта и кодекс ----------------------------------------------
+
+    @property
+    def goal(self):
+        """Текущая цель обучения: (номер, название, подсказка) или None, если всё выполнено."""
+        for i, (key, title, hint) in enumerate(GOALS):
+            if key not in self.goals_done:
+                return i, title, hint
+        return None
+
+    def complete(self, key):
+        if key in self.goals_done:
+            return
+        self.goals_done.add(key)
+        title = next(t for k, t, _ in GOALS if k == key)
+        self.say(f"Цель выполнена: {title}", "good")
 
     def discover(self, key):
         """Открывает запись кодекса. Возвращает True, если она новая."""
@@ -382,6 +413,7 @@ class World:
         vis = self.visual_range()
         if density >= C.ZONE_MIST:
             self.discover("zone:mist")
+            self.complete("mist")
         if density >= C.ZONE_DENSE:
             self.discover("zone:dense")
         if p.fouling > 0.05:
@@ -522,6 +554,8 @@ class World:
         take = min(rate * dt, node.amount, space)
         node.amount -= take
         self.captain.cargo[node.kind] = self.captain.cargo.get(node.kind, 0) + take
+        if self.captain.cargo[node.kind] >= 1:
+            self.complete("mine")
         if node.amount <= 0.01:
             self.nodes.remove(node)
             if node.kind != "zero":
@@ -631,16 +665,36 @@ class World:
         loud = self.player_loud()
         for tx in self.tihodonts:
             was = tx.angry
-            tx.update(dt, p.pos, loud)
+            if tx.update(dt, p.pos, loud) and tx.pos.distance_to(p.pos) < 1400:
+                self.emit("spout", tx.blowhole, tx.angry)
             if tx.angry and not was and tx.pos.distance_to(p.pos) < 400:
                 self.say("Тиходонт разбужен шумом двигателя!")
             if tx.angry and tx.pos.distance_to(p.pos) < Tihodont.RADIUS * 0.7:
                 p.apply_damage(30.0 * dt, "torpedo", self.rng)       # таран сквозь щиты
 
         self.rays = [r for r in self.rays if r.pos.distance_to(p.pos) < 1500]
-        while len(self.rays) < 14:
-            pos = p.pos + Vector2(1, 0).rotate(self.rng.uniform(0, 360)) * self.rng.uniform(150, 900)
-            self.rays.append(Ray(pos, self.rng))
+        while len(self.rays) < 18:                   # стая 3–6 скатов с общим курсом
+            center = p.pos + Vector2(1, 0).rotate(self.rng.uniform(0, 360)) * self.rng.uniform(250, 1000)
+            self._school_id = getattr(self, "_school_id", 0) + 1
+            heading_ = self.rng.uniform(0, 360)
+            for _ in range(self.rng.randint(3, 6)):
+                off = Vector2(self.rng.uniform(-50, 50), self.rng.uniform(-50, 50))
+                self.rays.append(Ray(center + off, self.rng, self._school_id, heading_ + self.rng.uniform(-15, 15)))
+        schools = {}
+        for r in self.rays:
+            schools.setdefault(r.school, []).append(r)
+        for group in schools.values():
+            if len(group) > 1:
+                c = sum((r.pos for r in group), Vector2()) / len(group)
+                mean = sum((Vector2(1, 0).rotate(r.angle) for r in group), Vector2())
+                for r in group:
+                    goal = mean + (c - r.pos) * 0.02            # выравнивание + сплочённость
+                    for o in group:                              # не налезать друг на друга
+                        d = r.pos - o.pos
+                        if o is not r and 0 < d.length() < 22:
+                            goal += d.normalize() * 1.5
+                    if goal.length_squared() > 1e-6:
+                        r.steer(Vector2(1, 0).angle_to(goal), 50, dt)
         for r in self.rays:
             r.update(dt, self.events.warning_at(r.pos, self.t))
 
@@ -689,6 +743,7 @@ class World:
         for pi in [pi for pi in self.pirates if not pi.ship.alive]:
             self.pirates.remove(pi)
             self.captain.kills += 1
+            self.complete("sink")
             self.emit("explosion", Vector2(pi.ship.pos), 3)
             self.emit("wreck", pi.ship, "pirate")
             kind = self.rng.choice(["salt", "condensate", "condensate", "filament"])
@@ -801,6 +856,8 @@ class World:
         value = self.cargo_value()
         self.captain.credits += value
         self.captain.cargo = {}
+        if value > 0:
+            self.complete("sell")
         return value
 
     def sell_cargo_action(self):
@@ -951,6 +1008,8 @@ class World:
             cap.storage.append(old)
         p.set_module(slot_index, key)
         self.discover(f"module:{key}")
+        if not from_storage:
+            self.complete("install")
         # новые модули приходят заряженными
         for w in p.weapons:
             if w.index == slot_index:

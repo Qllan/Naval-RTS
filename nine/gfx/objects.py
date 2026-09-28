@@ -61,33 +61,65 @@ def draw_loot(screen, cam, loot, t):
 
 
 def draw_ray(screen, cam, ray, t):
+    """Скат: ромб с машущими крыльями и хвостом-хлыстом; кончики крыльев светятся."""
     k = 1.0 - ray.depth
     if k <= 0.05:
         return
-    flap = math.sin(t * 5 + ray.pos.x * 0.1) * 2.5
-    body = [(8, 0), (1, 3), (-3, 10 + flap), (-5, 3), (-12, 0.5), (-12, -0.5), (-5, -3), (-3, -10 - flap), (1, -3)]
+    sz = getattr(ray, "size", 1.0)
+    ph = getattr(ray, "phase", ray.pos.x * 0.1)
+    flap = math.sin(t * 4 + ph) * 3.0
+    body = [(9, 0), (3, 3.5), (-1, 12 + flap), (-5, 4), (-8, 1), (-8, -1), (-5, -4), (-1, -12 - flap), (3, -3.5)]
+    body = [(x * sz, y * sz) for x, y in body]
     col = P.mix(P.OCEAN_MID, (120, 190, 200), k)
     pygame.draw.polygon(screen, col, _pts(cam, ray.pos, ray.angle, body))
-    pygame.draw.circle(screen, P.mix(P.OCEAN_MID, (200, 255, 240), k), cam.w2s(ray.pos), max(1, int(cam.px(1))))
+    pygame.draw.lines(screen, P.mix(P.OCEAN_MID, (170, 225, 230), k), False,
+                      _pts(cam, ray.pos, ray.angle, [(6 * sz, 0), (-5 * sz, 0)]), 1)
+    tail = [(-8 * sz - i * 3 * sz, math.sin(t * 6 + ph + i * 0.9) * i * 0.6) for i in range(6)]
+    pygame.draw.lines(screen, col, False, _pts(cam, ray.pos, ray.angle, tail), 1)
+    tip = P.mix(P.OCEAN_MID, (200, 255, 240), k * (0.6 + 0.4 * math.sin(t * 2 + ph)))
+    for side in (1, -1):
+        pygame.draw.circle(screen, tip, _pts(cam, ray.pos, ray.angle, [(-1 * sz, side * (12 + flap) * sz)])[0],
+                           max(1, int(cam.px(0.9))))
 
 
 def draw_tihodont(screen, cam, tx, t, fx):
     R = Tihodont.RADIUS
-    body_col = (70, 36, 34) if tx.angry else (16, 34, 42)
-    und = [math.sin(t * 1.2 + i * 0.8) * 4 for i in range(8)]
+    body_col = (92, 48, 44) if tx.angry else (40, 72, 84)
+    sw = getattr(tx, "swim", t)
+    und = [math.sin(sw * 1.2 + i * 0.8) * 4 for i in range(8)]
+    # хвостовой плавник: два лопасти, машут вбок
+    swing = math.sin(sw * 1.6) * 0.35
+    root = Vector2(-R * 1.3, 0)
+    tail_dir = Vector2(-1, 0).rotate(math.degrees(swing))
+    fluke = [root, root + tail_dir * R * 0.35 + tail_dir.rotate(90) * R * 0.45,
+             root + tail_dir * R * 0.22, root + tail_dir * R * 0.35 - tail_dir.rotate(90) * R * 0.45]
+    fins = []
+    for side in (1, -1):                                   # грудные плавники, медленно гребут
+        a = math.sin(sw * 1.1 + side) * 10
+        base = Vector2(R * 0.35, side * R * 0.45)
+        fins.append([base, base + Vector2(-R * 0.45, side * R * 0.35).rotate(a), base + Vector2(-R * 0.25, 0)])
     half = [(R * 1.15, 0), (R * 0.9, R * 0.35), (R * 0.4, R * 0.55 + und[0]), (-R * 0.2, R * 0.5 + und[1]),
             (-R * 0.7, R * 0.3 + und[2]), (-R * 1.1, R * 0.12), (-R * 1.35, R * 0.45 + und[3]),
             (-R * 1.3, 0)]
     shape = half + [(x, -y) for x, y in reversed(half[1:-1])]
     pts = _pts(cam, tx.pos, tx.angle, shape)
-    x0 = min(p.x for p in pts) - 4
-    y0 = min(p.y for p in pts) - 4
-    w = int(max(p.x for p in pts) - x0 + 8)
-    h = int(max(p.y for p in pts) - y0 + 8)
+    extra = [_pts(cam, tx.pos, tx.angle, fluke)] + [_pts(cam, tx.pos, tx.angle, f) for f in fins]
+    allp = pts + [q for poly in extra for q in poly]
+    x0 = min(p.x for p in allp) - 4
+    y0 = min(p.y for p in allp) - 4
+    w = int(max(p.x for p in allp) - x0 + 8)
+    h = int(max(p.y for p in allp) - y0 + 8)
     layer = pygame.Surface((max(1, w), max(1, h)), pygame.SRCALPHA)
+    for poly in extra:
+        pygame.draw.polygon(layer, (*P.shade(body_col, 0.85), 185), [(p.x - x0, p.y - y0) for p in poly])
     local = [(p.x - x0, p.y - y0) for p in pts]
     pygame.draw.polygon(layer, (*body_col, 205), local)
     pygame.draw.polygon(layer, (*P.shade(body_col, 1.8), 120), local, max(1, int(cam.px(2))))
+    ridge = _pts(cam, tx.pos, tx.angle, [(R * 0.8, 0), (-R * 1.2, 0)])     # хребет
+    pygame.draw.line(layer, (*P.shade(body_col, 1.5), 90), (ridge[0].x - x0, ridge[0].y - y0),
+                     (ridge[1].x - x0, ridge[1].y - y0), max(1, int(cam.px(3))))
+    bh = _pts(cam, tx.pos, tx.angle, [(R * 0.55, 0)])[0]                  # дыхало
+    pygame.draw.circle(layer, (*P.shade(body_col, 0.5), 220), (bh.x - x0, bh.y - y0), max(1, int(cam.px(3))))
     screen.blit(layer, (x0, y0))
     # биолюминесцентные пятна
     for i in range(12):

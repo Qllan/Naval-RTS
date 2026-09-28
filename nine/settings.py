@@ -65,6 +65,7 @@ class Settings:
     show_minimap: bool = True
     show_log: bool = True
     keys: dict = field(default_factory=default_keys)
+    seen_tips: list = field(default_factory=list)
 
     # --- клавиши --------------------------------------------------------------
 
@@ -100,6 +101,9 @@ class Settings:
         except (OSError, ValueError):
             return s
         for k, v in data.items():
+            if k == "seen_tips" and isinstance(v, list):
+                s.seen_tips = [x for x in v if isinstance(x, str)]
+                continue
             if k == "keys" and isinstance(v, dict):
                 s.keys.update({a: n for a, n in v.items() if a in s.keys and isinstance(n, str)})
                 continue

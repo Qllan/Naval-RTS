@@ -27,6 +27,7 @@ HELP_LINES = [
     "Электроника в Пелене ест больше энергии: если реактор не тянет — гаснут щиты и радар.",
     "Форсаж в Пелене оставляет налёт филаментов: корабль тяжелеет. Чистка — в порту.",
     "Скаты уходят на глубину — скоро Всплеск. Под Тиходонтом вас не видно, если идти тихо.",
+    "Клавиши переназначаются в настройках (Esc → Настройки). ` или F1 — консоль отладки.",
 ]
 
 SUB_ICON = {"engine": "engine", "rudder": "rudder", "sensors": "sensor", "weapons": "gun"}
@@ -127,6 +128,7 @@ class Hud:
             self._minimap(world)
         self._weapons(world)
         if self.hints:
+            self._goal(world)
             self._hints(world)
         self._toasts(world)
         if self.show_log:
@@ -472,6 +474,23 @@ class Hud:
                pp + Vector2(-3, -3).rotate(p.angle)]
         pygame.draw.polygon(s, (255, 255, 255), tri)
         ui.text(s, "С", (x0 + n - 8, y0 + 4), ui.DIM, 14, True)
+
+    def _goal(self, world):
+        """Трекер цели обучения под картой: название и подсказка."""
+        g = world.goal
+        if g is None:
+            return
+        from .world import GOALS
+        i, title, hint = g
+        w = self.MINIMAP + 12
+        x = self.w - w - 12
+        y = 12 + (self.MINIMAP + 34 + 8 if self.show_minimap else 0)
+        lines = ui.wrap(hint, w - 20, 15)
+        box = ui.panel(self.screen, (x, y, w, 46 + 16 * len(lines)), f"Цель {i + 1}/{len(GOALS)}", ui.C_ENERGY)
+        self.panels.append(box)
+        ui.text(self.screen, title, (x + 10, y + 26), ui.TEXT, 17, True)
+        for j, line in enumerate(lines):
+            ui.text(self.screen, line, (x + 10, y + 44 + j * 16), ui.DIM, 15)
 
     # --- вооружение ------------------------------------------------------------------
 

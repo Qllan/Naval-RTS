@@ -181,6 +181,18 @@ class FX:
                              layer="water")
                 if player.pos.distance_to(pos) < 60:
                     cam.add_shake(min(8.0, impact / 20))
+            elif kind == "spout":
+                # выдох Тиходонта: фонтан брызг и облачко пара над дыхалом
+                pos, angry = ev[1], ev[2]
+                for _ in range(26):
+                    self.add(pos, self._rv(90), rng.uniform(0.6, 1.4), 2, P.FOAM, "foam", grow=5, drag=2.2,
+                             layer="water")
+                for _ in range(5):
+                    self.add(pos, self._rv(25), rng.uniform(1.4, 2.4), 5, (170, 185, 195), "smoke", grow=16,
+                             drag=1.0)
+                self.add(pos, Vector2(), 1.0, 6, P.FOAM, "ring", grow=40, layer="water")
+                if angry:
+                    self.add(pos, Vector2(), 0.3, 18, (240, 110, 80), "glow")
             elif kind == "wreck" and self.art is not None:
                 _, ship, pal = ev
                 self._wreck(ship, pal)

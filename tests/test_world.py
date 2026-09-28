@@ -261,3 +261,16 @@ def test_current_carries_ship_and_bloom_brings_rare_resources(world):
     world.events.spawn(BLOOM, Vector2(4000, 4000), world.t)
     step(world, Controls(), 0.1)
     assert len(world.nodes) >= n + 3
+
+
+def test_onboarding_goals_progress():
+    from nine.world import World
+
+    w = World(2)
+    assert w.goal[0] == 0
+    w.captain.cargo = {"salt": 5}
+    w.complete("mine")
+    w.sell_cargo()
+    assert {"mine", "sell"} <= w.goals_done
+    assert w.goal[0] == 2
+    assert any("Цель выполнена" in m for m, _, _ in w.log)

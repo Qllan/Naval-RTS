@@ -1,3 +1,5 @@
+import os
+
 import pygame
 
 from nine.game import Game
@@ -197,4 +199,47 @@ def test_port_mouse_drag_installs_module_and_service_all():
     leave = next(r for r, k, i in ui.zones if k == "button" and i == "leave")
     post(pygame.MOUSEBUTTONDOWN, button=1, pos=leave.center)
     assert not g.docked
+    pygame.quit()
+
+
+def test_save_roundtrip_and_console():
+    from nine import save as saves
+    from nine.screens import Console
+
+    pygame.display.init()
+    pygame.font.init()
+    screen = pygame.display.set_mode((1280, 720))
+    g = Game(seed=5, screen=screen)
+    w = g.world
+    con = Console(g)
+    g.push(con)
+    for cmd in ("credits 777", "tp 3000 3000", "spawn hunter 2", "event storm", "time 22", "god", "fauna 2",
+                "reveal", "heal", "goals", "nonsense"):
+        con.out += con.run(cmd)
+    assert w.captain.credits >= 777
+    assert w.player.pos.distance_to((3000, 3000)) < 1
+    assert len(w.pirates) >= 2
+    assert w.god and w.goal is None
+    assert abs(w.time_of_day - 22 / 24) < 0.01
+    for _ in range(5):
+        g.step(1 / 60)
+    con.close()
+
+    w.captain.storage.append("missile_s")
+    w.waypoint = pygame.Vector2(100, 200)
+    w.memory[3, 4] = 0.5
+    g.played = True
+    g.save_game()
+    loaded = saves.load()
+    assert loaded is not None
+    assert loaded.seed == w.seed
+    assert loaded.captain.credits == w.captain.credits
+    assert loaded.captain.storage == w.captain.storage
+    assert loaded.player.fit == w.player.fit
+    assert loaded.player.pos.distance_to(w.player.pos) < 1
+    assert loaded.waypoint == w.waypoint
+    assert abs(loaded.memory[3, 4] - 0.5) < 0.01
+    assert loaded.goals_done == w.goals_done
+    assert g.load_game()
+    os.remove(saves.save_path())
     pygame.quit()

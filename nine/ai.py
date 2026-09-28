@@ -1,5 +1,6 @@
 """NPC и фауна на простых конечных автоматах."""
 
+import math
 import random
 
 from pygame.math import Vector2
@@ -86,7 +87,7 @@ class Pirate:
 class Tihodont:
     """Мирный гигант. Под ним не работают радары. Шум двигателя злит его."""
 
-    RADIUS = 125.0
+    RADIUS = 145.0
 
     def __init__(self, pos, rng: random.Random):
         self.pos = Vector2(pos)
@@ -94,8 +95,15 @@ class Tihodont:
         self.rng = rng
         self.anger = 0.0
         self.turn_timer = 0.0
+        self.breath = rng.uniform(4, 20)      # до следующего выдоха (фонтан над дыхалом)
+        self.swim = rng.uniform(0, 10)        # фаза взмахов хвоста
+
+    @property
+    def blowhole(self):
+        return self.pos + heading(self.angle) * self.RADIUS * 0.55
 
     def update(self, dt, player_pos, player_loud):
+        """Возвращает True, если в этот кадр Тиходонт выдохнул."""
         near = player_pos is not None and self.pos.distance_to(player_pos) < self.RADIUS * 1.6
         if near and player_loud:
             self.anger = min(8.0, self.anger + dt * 3)
@@ -113,7 +121,13 @@ class Tihodont:
                 self.angle += self.rng.uniform(-40, 40)
                 self.turn_timer = self.rng.uniform(3, 7)
             speed = 18.0
+        self.swim += dt * (0.8 + speed / 60)
         self.pos += heading(self.angle) * speed * dt
+        self.breath -= dt * (3.0 if self.angry else 1.0)
+        if self.breath <= 0:
+            self.breath = self.rng.uniform(14, 30)
+            return True
+        return False
 
     @property
     def angry(self):
@@ -123,12 +137,19 @@ class Tihodont:
 class Ray:
     """Скат-флюкс — живой индикатор. Перед Всплеском уходит на глубину."""
 
-    def __init__(self, pos, rng: random.Random):
+    def __init__(self, pos, rng: random.Random, school=0, angle=None):
         self.pos = Vector2(pos)
-        self.angle = rng.uniform(0, 360)
+        self.angle = rng.uniform(0, 360) if angle is None else angle
         self.rng = rng
         self.depth = 0.0            # 0 — у поверхности, 1 — ушёл
         self.diving = False
+        self.school = school        # скаты держатся стаями
+        self.size = rng.uniform(0.9, 1.5)
+        self.phase = rng.uniform(0, math.tau)
+
+    def steer(self, goal_angle, rate, dt):
+        diff = (goal_angle - self.angle + 180) % 360 - 180
+        self.angle += max(-rate * dt, min(rate * dt, diff))
 
     def update(self, dt, warned):
         self.diving = warned
