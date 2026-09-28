@@ -17,6 +17,7 @@ from .gfx.fx import FX
 from .gfx.lighting import Lighting, ambient_color, sun_shadow
 from .gfx.ocean import FogOfWar, Ocean
 from .gfx.ship_art import ShipArt, nav_lights, window_lights
+from .gfx.wake import Wakes
 from .ship import heading
 
 
@@ -28,6 +29,7 @@ class Renderer:
         self.art = ShipArt()
         self.fx = FX()
         self.fx.art = self.art
+        self.wakes = Wakes()
         self.ocean = Ocean()
         self.fog = FogOfWar(self.w, self.h)
         self.font = pygame.font.Font(None, 20)
@@ -75,7 +77,12 @@ class Renderer:
         self.fx.ambient(world, cam, dt, lambda pos: cam.visible(pos, 80) and seen(pos))
         self.fx.update(dt)
 
+        daylight = world.daylight()
+        wake_ships = [p] + [pr.ship for pr in world.pirates if seen(pr.ship.pos)]
+        self.wakes.update(wake_ships, t, dt)
+
         self.ocean.draw_water(screen, cam, t)
+        self.wakes.draw(screen, cam, t, daylight)
         self.ocean.draw_eye_under(screen, cam, world, self.fx)
         O.draw_port(screen, cam, world, self.font)
         self.fx.draw(screen, cam, "water")
@@ -101,12 +108,14 @@ class Renderer:
             if not cam.visible(s.pos):
                 continue
             if seen(s.pos):
+                Wakes.bow_wave(screen, cam, s, daylight)
                 self.art.draw(screen, cam, s, "pirate", t, shadow=shadow)
                 ships.append(s)
             elif blip(s.pos):
                 self._blip(s.pos, t)
 
         alpha = 90 if p.utility_active("bioscreen") else 255
+        Wakes.bow_wave(screen, cam, p, daylight)
         self.art.draw(screen, cam, p, "capsule" if world.in_capsule else "player", t, alpha, shadow=shadow)
         ships.append(p)
 

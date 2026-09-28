@@ -20,6 +20,7 @@ TILE_PX = 128
 _TILES = {}                 # текстуры строятся один раз на процесс
 OCEAN_TILE_W = 520.0        # мировой размер плитки океана
 WISP_TILE_W = 700.0
+SWELL_TILE_W = 900.0
 MASK_CELL_PX = 30
 VEIL_EVERY = 4             # оттенок и космы пересчитываются раз в N кадров (со сдвигом)
 
@@ -57,6 +58,18 @@ class Ocean:
             ridge = max(0.0, 1.0 - abs(k - 0.5) * 18)          # тонкие гребни
             return (*P.GLINT, int(26 * ridge))
 
+        s1, s2 = ValueNoise(seed + 13, 4), ValueNoise(seed + 14, 8)
+
+        def swell(u, v):
+            # направленная зыбь: вытянутые гребни поперёк ветра, изломанные шумом
+            k = _fbm((s1, s2), u, v)
+            phase = u * 5 + v * 2 + k * 1.8
+            crest = max(0.0, math.sin(2 * math.pi * phase)) ** 6
+            trough = max(0.0, -math.sin(2 * math.pi * phase)) ** 2
+            if crest > trough:
+                return (*P.GLINT, int(44 * crest))
+            return (2, 6, 12, int(40 * trough))
+
         w1, w2, w3 = ValueNoise(seed + 9, 4), ValueNoise(seed + 10, 8), ValueNoise(seed + 11, 16)
 
         def wisp(u, v):
@@ -65,8 +78,8 @@ class Ocean:
             return (*P.VEIL_WISP, int(210 * a ** 1.3))
 
         if seed not in _TILES:
-            _TILES[seed] = (_tile(water), _tile(ripple, 192), _tile(wisp))
-        self.water_tile, self.ripple_tile, self.wisp_tile = _TILES[seed]
+            _TILES[seed] = (_tile(water), _tile(ripple, 192), _tile(wisp), _tile(swell, 160))
+        self.water_tile, self.ripple_tile, self.wisp_tile, self.swell_tile = _TILES[seed]
         self._scaled = {}
         self.rng = random.Random(seed)
         self.mask_small = None
@@ -122,6 +135,8 @@ class Ocean:
 
     def draw_water(self, screen, cam, t):
         self._tiled(screen, self._scaled_tile("water", self.water_tile, OCEAN_TILE_W, cam.zoom), OCEAN_TILE_W, cam)
+        sw = self._scaled_tile("swell", self.swell_tile, SWELL_TILE_W, cam.zoom)
+        self._tiled(screen, sw, SWELL_TILE_W, cam, Vector2(-t * 16, -t * 6))       # зыбь бежит по ветру
         rip = self._scaled_tile("ripple", self.ripple_tile, OCEAN_TILE_W * 0.7, cam.zoom)
         self._tiled(screen, rip, OCEAN_TILE_W * 0.7, cam, Vector2(t * 9, t * 4))
         self._tiled(screen, rip, OCEAN_TILE_W * 0.7, cam, Vector2(-t * 6 + 211, t * 7 + 97))

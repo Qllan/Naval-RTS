@@ -242,7 +242,7 @@ class FX:
         for s in ships:
             sp = s.speed
             if sp > 15:
-                n = sp * dt / 5
+                n = sp * dt / 16          # только взбитая вода у кормы; сам след — в wake.py
                 while n > 0:
                     if rng.random() < n:
                         for sp_pos in stern_points(s):
