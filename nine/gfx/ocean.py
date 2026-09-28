@@ -75,7 +75,7 @@ class Ocean:
         def wisp(u, v):
             k = _fbm((w1, w2, w3), u, v)
             a = max(0.0, min(1.0, (k - 0.38) * 2.6))
-            return (*P.VEIL_WISP, int(210 * a ** 1.3))
+            return (*P.VEIL_WISP, int(170 * a ** 1.3))
 
         if seed not in _TILES:
             _TILES[seed] = (_tile(water), _tile(ripple, 192), _tile(wisp), _tile(swell, 160))
@@ -85,6 +85,7 @@ class Ocean:
         self.mask_small = None
         self._mask_zoom = None
         self._wisp_zoom = None
+        self.density_view = None
         self.frame = 0
         self._screen_layer = None
         self.wisps_enabled = True
@@ -157,7 +158,7 @@ class Ocean:
 
     # --- Пелена ---------------------------------------------------------------
 
-    def draw_veil(self, screen, cam, world):
+    def draw_veil(self, screen, cam, world, clear_points=()):
         """Оттенок по плотности + космы тумана, видимые только в густой Пелене.
 
         Оба слоя привязаны к миру; оттенок и космы пересчитываются в разных кадрах
@@ -166,7 +167,7 @@ class Ocean:
         self.frame += 1
         zoom_changed = self._mask_zoom is None or abs(cam.zoom / self._mask_zoom - 1) > 0.03
         if self.mask_small is None or zoom_changed or self.frame % VEIL_EVERY == 0:
-            self._rebuild_tint(cam, world)
+            self._rebuild_tint(cam, world, clear_points)
         if self.wisps_enabled and (self._wisp_zoom is None or zoom_changed
                                    or self.frame % VEIL_EVERY == VEIL_EVERY // 2):
             self._rebuild_wisps(cam, world)
@@ -174,7 +175,7 @@ class Ocean:
         if self.wisps_enabled:
             screen.blit(self.wisps, cam.w2s(self._wisp_origin))
 
-    def _rebuild_tint(self, cam, world):
+    def _rebuild_tint(self, cam, world, clear_points=()):
         cw, ch = cam.w // MASK_CELL_PX + 3, cam.h // MASK_CELL_PX + 3
         step = MASK_CELL_PX / cam.zoom
         x0, y0, _, _ = cam.world_rect()
@@ -182,13 +183,28 @@ class Ocean:
         y0 -= y0 % step + step
         self._mask_origin = Vector2(x0, y0)
         self._mask_zoom = cam.zoom
-        d = world.veil.density_grid(x0 + np.arange(cw) * step, y0 + np.arange(ch) * step, world.t).T
+        xs = x0 + np.arange(cw) * step
+        ys = y0 + np.arange(ch) * step
+        d = world.veil.density_grid(xs, ys, world.t).T
+        # кильватер расчищает туман на пару секунд
+        if clear_points:
+            X, Y = np.meshgrid(xs, ys, indexing="ij")
+            clear = np.zeros_like(d)
+            for (px, py), k in clear_points:
+                clear += k * np.exp(-((X - px) ** 2 + (Y - py) ** 2) / (60.0 ** 2))
+            d = d * (1 - np.clip(clear, 0, 0.85))
+        self.density_view = d
         hot = np.clip(d - 0.75, 0, 1)[..., None] * 2
         base, surge = np.array(P.VEIL_TINT, float), np.array(P.SURGE, float)
         rgb = base + (surge - base) * hot
+        # светящиеся границы зон: Чистый слой | Мгла | Плотная Пелена
+        pulse = 0.75 + 0.25 * math.sin(world.t * 2.2)
+        band = (np.exp(-((d - 0.30) / 0.018) ** 2) + np.exp(-((d - 0.60) / 0.018) ** 2)) * pulse
+        rgb = rgb + (np.array((210, 180, 255), float) - rgb) * np.clip(band, 0, 1)[..., None] * 0.7
         tint = pygame.Surface((cw, ch), pygame.SRCALPHA)
-        pygame.surfarray.pixels3d(tint)[:] = rgb.astype(np.uint8)
-        pygame.surfarray.pixels_alpha(tint)[:] = np.minimum(120, 8 + 115 * d ** 1.4).astype(np.uint8)
+        pygame.surfarray.pixels3d(tint)[:] = np.clip(rgb, 0, 255).astype(np.uint8)
+        alpha = np.minimum(92, 4 + 90 * d ** 1.5) + 70 * np.clip(band, 0, 1)
+        pygame.surfarray.pixels_alpha(tint)[:] = np.clip(alpha, 0, 255).astype(np.uint8)
         mask = pygame.Surface((cw, ch), pygame.SRCALPHA)
         mask.fill((255, 255, 255, 0))
         pygame.surfarray.pixels_alpha(mask)[:] = (200 * np.clip((d - 0.25) * 1.6, 0, 1)).astype(np.uint8)
@@ -308,7 +324,7 @@ class Ocean:
 class FogOfWar:
     """Затемнение за пределами визуальной дальности."""
 
-    ALPHA = 165
+    ALPHA = 118
 
     def __init__(self, w, h):
         self.layer = pygame.Surface((w, h), pygame.SRCALPHA)

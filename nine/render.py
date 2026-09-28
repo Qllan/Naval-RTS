@@ -20,6 +20,8 @@ from .gfx.lighting import Lighting, ambient_color, sun_shadow
 from .gfx.ocean import FogOfWar, Ocean
 from .gfx.ship_art import ShipArt, nav_lights, window_lights
 from .gfx.wake import Wakes
+from .gfx import veil_fx as VF
+from collections import deque
 from .ship import heading
 
 
@@ -34,7 +36,13 @@ class Renderer:
         self.wakes = Wakes()
         self.islands = IslandArt()
         self.port = PortArt()
+        self.motes = VF.VeilMotes()
+        self.sky = VF.SkyGlimpse(self.w, self.h)
+        self.distortion = True            # искажения в плотной Пелене (настройка)
+        self.haze_enabled = True
+        self.halos = True
         self.ocean = Ocean()
+        self.haze = VF.Haze(self.ocean.wisp_tile)
         self.fog = FogOfWar(self.w, self.h)
         self.font = pygame.font.Font(None, 20)
         self.small = pygame.font.Font(None, 17)
@@ -49,6 +57,9 @@ class Renderer:
         self.lighting.cache.clear()
         self.fx.max_particles = 2200 if self.high_quality else 700
         self.ocean.wisps_enabled = self.high_quality
+        self.halos = self.high_quality
+        self.motes.max_count = 160 if self.high_quality else 60
+        self.haze_enabled = self.high_quality
 
     def s2w(self, pos):
         return self.cam.s2w(pos)
@@ -77,7 +88,13 @@ class Renderer:
         def blip(pos):
             return p.pos.distance_to(pos) < radar
 
-        self.fx.consume(world.fx, cam, p)
+        events = deque(world.fx)
+        world.fx.clear()
+        self.last_events = list(events)           # для звука и HUD
+        for ev in events:
+            if ev[0] == "sky":
+                self.sky.trigger()
+        self.fx.consume(events, cam, p)
         self.fx.ambient(world, cam, dt, lambda pos: cam.visible(pos, 80) and seen(pos))
         self.fx.update(dt)
 
@@ -90,6 +107,7 @@ class Renderer:
         for isl in world.islands:
             self.islands.draw(screen, cam, isl, t, daylight)
         self.wakes.draw(screen, cam, t, daylight)
+        VF.draw_surge_telegraphs(screen, cam, world, self.fx)
         self.ocean.draw_eye_under(screen, cam, world, self.fx)
         self.port.draw(screen, cam, world, self.font)
         self.fx.draw(screen, cam, "water")
@@ -117,13 +135,18 @@ class Renderer:
             if seen(s.pos):
                 Wakes.bow_wave(screen, cam, s, daylight)
                 self.art.draw(screen, cam, s, "pirate", t, shadow=shadow)
+                VF.draw_cocoon(screen, cam, s, t)
                 ships.append(s)
             elif blip(s.pos):
                 self._blip(s.pos, t)
+        for ph in world.phantoms:                  # галлюцинации неотличимы от настоящих отметок
+            if cam.visible(ph["pos"]):
+                self._blip(ph["pos"], t)
 
         alpha = 90 if p.utility_active("bioscreen") else 255
         Wakes.bow_wave(screen, cam, p, daylight)
         self.art.draw(screen, cam, p, "capsule" if world.in_capsule else "player", t, alpha, shadow=shadow)
+        VF.draw_cocoon(screen, cam, p, t)
         ships.append(p)
 
         for pr in world.projectiles:
@@ -137,16 +160,32 @@ class Renderer:
         for sm in world.smokes:
             if cam.visible(sm.pos, sm.radius):
                 O.draw_smoke_screen(screen, cam, sm, self.fx, t)
-        self.ocean.draw_veil(screen, cam, world)
+        clear = []
+        for tr in self.wakes.trails.values():
+            for i, (ts, pos, ang, sp, hw) in enumerate(tr):
+                age = t - ts
+                if age < 3.0 and i % 3 == 0:
+                    clear.append(((pos.x, pos.y), (1 - age / 3.0) * min(1.0, sp / 90)))
+        self.ocean.draw_veil(screen, cam, world, clear)
+        d_here = world.density_at(p.pos)
+        if self.haze_enabled:
+            self.haze.draw(screen, cam, d_here, t)
 
         # --- освещение
         ambient = ambient_color(world)
         if self.fx.flash > 0:
             ambient = P.mix(ambient, (255, 255, 255), self.fx.flash)
         night = 1.0 - world.daylight()
+        lights = self._lights(world, ships, night)
         if self.lighting.begin(ambient):
-            self._lights(world, ships, night)
+            for kind, pos, r, col, k in lights:
+                if kind == "spot":
+                    self.lighting.spot(pos, r[0], r[1], col)
+                else:                             # point и flood — обычные источники
+                    self.lighting.light(pos, r, col, k)
             self.lighting.apply(screen)
+        if self.halos:
+            self._halos(world, lights, night)
 
         # --- светящееся поверх освещения
         self.fx.draw(screen, cam, "air", emissive=True)
@@ -155,6 +194,8 @@ class Renderer:
                 self._projectile_glow(pr)
         if night > 0.05:
             self._nav_lights(ships, night, t)
+        self.motes.update(world, cam, dt)
+        self.motes.draw(screen, cam, t, night, self.fx)
         self._shield_bubble(p, t)
         for s in ships:
             if s is not p:
@@ -162,7 +203,10 @@ class Renderer:
 
         self.ocean.draw_eye_over(screen, cam, world)
         self.ocean.draw_weather(screen, cam, world, self.fx)
+        self.sky.draw(screen, dt, self.fx)
         self.fog.draw(screen, cam, p.pos, vis)
+        if self.distortion and self.high_quality:
+            VF.distort(screen, d_here, t)
         self._event_signatures(world, radar)
         if radar > 0:
             pygame.draw.circle(screen, (40, 90, 80), cam.w2s(p.pos), int(cam.px(radar)), 1)
@@ -171,50 +215,68 @@ class Renderer:
     # --- свет ------------------------------------------------------------
 
     def _lights(self, world, ships, night):
-        cam, L = self.cam, self.lighting
+        """Источники света кадра: [(вид, экранная позиция, радиус px, цвет, сила)].
+
+        Один список кормит и карту освещения (ночью), и ореолы в тумане (всегда).
+        """
+        cam = self.cam
         p = world.player
         t = world.t
-        # корабли: палубные огни, окна, ходовые огни
+        out = []
+
+        def add(pos, radius, col, k, halo=True):
+            if k > 0.02 and cam.visible(pos, radius):
+                out.append(("point" if halo else "flood", cam.w2s(pos), cam.px(radius), col, k))
+
         for s in ships:
-            L.light(cam.w2s(s.pos), cam.px(s.radius * 3.2), (120, 120, 110), 0.7 * night)
+            add(s.pos, s.radius * 3.2, (120, 120, 110), 0.7 * night, halo=False)
             for wp in window_lights(s):
-                L.light(cam.w2s(wp), cam.px(14), (255, 210, 140), 0.8 * night)
+                add(wp, 14, (255, 210, 140), 0.8 * night)
             for pos, col in nav_lights(s):
-                L.light(cam.w2s(pos), cam.px(12), col, 0.9 * night)
+                add(pos, 12, col, 0.9 * night)
         if world.spotlight and not world.in_capsule:
             bow = p.pos + Vector2(p.radius, 0).rotate(p.angle)
-            L.spot(cam.w2s(bow), p.angle, cam.px(560), (235, 235, 215))
-            L.light(cam.w2s(bow), cam.px(30), (255, 250, 230), 1.0)
-        # вспышки, взрывы, пожары
+            out.append(("spot", cam.w2s(bow), (p.angle, cam.px(560)), (235, 235, 215), 1.0))
+            add(bow, 30, (255, 250, 230), 1.0, halo=False)
         for pos, radius, col, k in self.fx.lights():
-            if cam.visible(pos, radius):
-                L.light(cam.w2s(pos), cam.px(radius), col, k)
+            add(pos, radius, col, k)
         for pr in world.projectiles:
-            if cam.visible(pr.pos):
-                col = P.TRACER_EM if pr.dtype == "em" else (255, 190, 120)
-                L.light(cam.w2s(pr.pos), cam.px(26 if pr.kind == "shell" else 44), col, 0.6)
-        # порт, ресурсы, фауна, Око
+            add(pr.pos, 26 if pr.kind == "shell" else 44, P.TRACER_EM if pr.dtype == "em" else (255, 190, 120), 0.6)
         if cam.visible(world.port, 400):
             for lp, col, r in port_lights(world):
-                L.light(cam.w2s(lp), cam.px(r), col, 1.0)
+                add(lp, r, col, 1.0)
         for n in world.nodes:
-            if n.kind != "salt" and cam.visible(n.pos, 80):
+            if n.kind != "salt":
                 col = {"condensate": (170, 110, 240), "filament": (200, 170, 255), "zero": (255, 255, 255)}[n.kind]
-                L.light(cam.w2s(n.pos), cam.px(60 + n.amount), col, 0.7 + 0.2 * math.sin(t * 2 + n.pos.x))
+                add(n.pos, 60 + n.amount, col, 0.7 + 0.2 * math.sin(t * 2 + n.pos.x))
         for tx in world.tihodonts:
-            if cam.visible(tx.pos, 200) and p.pos.distance_to(tx.pos) < world.visual_range() + 150:
-                col = (240, 90, 60) if tx.angry else (60, 220, 190)
-                L.light(cam.w2s(tx.pos), cam.px(170), col, 0.55)
+            if p.pos.distance_to(tx.pos) < world.visual_range() + 150:
+                add(tx.pos, 170, (240, 90, 60) if tx.angry else (60, 220, 190), 0.55)
         for isl in world.islands:
             if isl.ruins and cam.visible(isl.pos, isl.r_max + 200):
                 on = int(t * 1.2 + isl.seed % 7) % 3 == 0
                 for b in self.islands.beacons(isl):
-                    L.light(cam.w2s(b), cam.px(90 if on else 30), (255, 70, 50), 0.9 if on else 0.3)
-        if cam.visible(world.eye, 900):
-            L.light(cam.w2s(world.eye), cam.px(700), (200, 200, 255), 1.0)
+                    add(b, 90 if on else 30, (255, 70, 50), 0.9 if on else 0.3)
+        add(world.eye, 700, (200, 200, 255), 1.0)
         for ev in world.events.active:
-            if ev.phase(t) == "active" and ev.data.telegraphed_by_rays and cam.visible(ev.pos, ev.data.radius):
-                L.light(cam.w2s(ev.pos), cam.px(ev.data.radius), (120, 60, 170), 0.6)
+            if ev.phase(t) == "active" and ev.data.telegraphed_by_rays:
+                add(ev.pos, ev.data.radius, (120, 60, 170), 0.6)
+        return out
+
+    def _halos(self, world, lights, night):
+        """Ореолы: свет рассеивается в тумане Пелены — чем гуще, тем шире и ярче ореол."""
+        cam = self.cam
+        base = 0.2 + 0.8 * night
+        for kind, pos, r, col, k in lights:
+            if kind != "point" or r > 400 or r < 6:
+                continue
+            d = world.density_at(cam.s2w(pos))
+            h = base * k * (0.15 + 0.85 * d)
+            if h < 0.06:
+                continue
+            q = max(1, min(4, round(0.45 * h * 6)))                   # квантование — ради кэша спрайтов
+            img = self.fx.glow(P.shade(col, q / 6), r * (0.9 + 0.9 * d))
+            self.screen.blit(img, img.get_rect(center=pos), special_flags=pygame.BLEND_ADD)
 
     def _nav_lights(self, ships, night, t):
         """Сами огни — яркие точки поверх темноты; топовый мигает."""

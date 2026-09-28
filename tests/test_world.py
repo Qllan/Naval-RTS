@@ -228,3 +228,22 @@ def test_day_night_cycle_changes_vision_and_spotlight_trades_stealth(world):
     assert world.spotlight
     assert world.visual_range() > day_vis * 0.8
     assert world.player_signature() > day_sig
+
+
+def test_phantoms_appear_in_dense_veil_and_cannot_be_locked(world):
+    world.player.pos = Vector2(C.EYE_POS) + Vector2(-C.EYE_WALL_R - 200, 300)
+    world.pirate_spawn_cd = 1e9
+    for _ in range(60 * 30):
+        world._update_phantoms(1 / 60, 0.95)
+        if world.phantoms:
+            break
+    assert world.phantoms
+    ph = world.phantoms[0]
+    assert world._nearest_to_cursor(ph["pos"], 400, need_radar=True) is None     # не цель
+
+
+def test_calm_start_near_player_opens_the_sky(world):
+    from nine.events import CALM
+    world.events.spawn(CALM, world.player.pos, world.t)
+    step(world, Controls(), 0.1)
+    assert any(ev[0] == "sky" for ev in world.fx)

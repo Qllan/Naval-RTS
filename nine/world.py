@@ -75,6 +75,7 @@ class World:
         self.ammo_type = "std"
         self.spotlight = False
 
+        self.phantoms = []          # галлюцинации: ложные отметки радара в плотной Пелене
         self.pirates: list[Pirate] = []
         self.tihodonts: list[Tihodont] = []
         self.rays: list[Ray] = []
@@ -242,6 +243,8 @@ class World:
         for ev in self.events.started:
             if ev.covers(p.pos) or self.perceives(ev.pos):
                 self.say(f"{ev.data.name}!")
+                if ev.data.name == "Штиль" and ev.covers(p.pos):
+                    self.emit("sky")
 
         density = self.density_at(p.pos)
         p.cargo_mass = self.cargo_used
@@ -274,6 +277,7 @@ class World:
             if ctl.mine:
                 self._mine(dt)
 
+        self._update_phantoms(dt, density)
         self._update_pirates(dt)
         self._update_fauna(dt)
         self._update_projectiles(dt)
@@ -469,6 +473,24 @@ class World:
                         m.lock = 0.0
                         self.say("Ракета! Захват на вас.")
                     self.projectiles += shots
+
+    def _update_phantoms(self, dt, density):
+        """В плотной Пелене филаменты резонируют с мозгом: на радаре появляются несуществующие цели."""
+        p = self.player
+        radar, vis = self.radar_range(), self.visual_range()
+        keep = []
+        for ph in self.phantoms:
+            ph["life"] -= dt
+            ph["pos"] += ph["vel"] * dt
+            d = ph["pos"].distance_to(p.pos)
+            if ph["life"] > 0 and vis < d < max(radar, vis + 1):
+                keep.append(ph)
+        self.phantoms = keep
+        if density > 0.6 and radar > vis and self.rng.random() < (density - 0.6) * 1.2 * dt:
+            ang = self.rng.uniform(0, 360)
+            pos = p.pos + Vector2(1, 0).rotate(ang) * self.rng.uniform(vis + 40, radar)
+            vel = Vector2(1, 0).rotate(self.rng.uniform(0, 360)) * self.rng.uniform(40, 140)
+            self.phantoms.append({"pos": pos, "vel": vel, "life": self.rng.uniform(3, 8)})
 
     def _update_fauna(self, dt):
         p = self.player
