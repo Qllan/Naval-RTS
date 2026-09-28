@@ -1,8 +1,8 @@
 """Отрисовка мира: собирает слои из nine/gfx в кадр.
 
 Порядок слоёв: вода → Око (низ) → порт → следы на воде → ресурсы, лут, фауна →
-корабли → снаряды → эффекты в воздухе → дымовые завесы → Пелена → рукава шторма →
-погода → туман войны → прицельные маркеры.
+корабли → снаряды → дым → Пелена → [освещение: сцена × карта света] →
+светящееся (вспышки, трассеры, огни) → рукава шторма → погода → туман войны → маркеры.
 """
 
 import math
@@ -14,8 +14,9 @@ from .gfx import objects as O
 from .gfx import palette as P
 from .gfx.camera import Camera
 from .gfx.fx import FX
+from .gfx.lighting import Lighting, ambient_color, sun_shadow
 from .gfx.ocean import FogOfWar, Ocean
-from .gfx.ship_art import ShipArt
+from .gfx.ship_art import ShipArt, nav_lights, window_lights
 from .ship import heading
 
 
@@ -31,6 +32,16 @@ class Renderer:
         self.font = pygame.font.Font(None, 20)
         self.small = pygame.font.Font(None, 17)
         self._last_t = None
+        self.high_quality = True
+        self.lighting = Lighting(self.w, self.h, scale=2)
+
+    def toggle_quality(self):
+        """F10: низкое качество — карта света грубее, меньше частиц, без косм Пелены."""
+        self.high_quality = not self.high_quality
+        self.lighting.set_scale(2 if self.high_quality else 4)
+        self.lighting.cache.clear()
+        self.fx.max_particles = 2200 if self.high_quality else 700
+        self.ocean.wisps_enabled = self.high_quality
 
     def s2w(self, pos):
         return self.cam.s2w(pos)
@@ -82,33 +93,56 @@ class Renderer:
             if cam.visible(tx.pos, 200) and seen(tx.pos):
                 O.draw_tihodont(screen, cam, tx, t, self.fx)
 
+        shadow = sun_shadow(world, cam.zoom)
+        ships = []
         for pr in world.pirates:
             s = pr.ship
             if not cam.visible(s.pos):
                 continue
             if seen(s.pos):
-                self.art.draw(screen, cam, s, "pirate", t)
-                self._hp_bar(s)
+                self.art.draw(screen, cam, s, "pirate", t, shadow=shadow)
+                ships.append(s)
             elif blip(s.pos):
                 self._blip(s.pos, t)
 
         alpha = 90 if p.utility_active("bioscreen") else 255
-        self.art.draw(screen, cam, p, "capsule" if world.in_capsule else "player", t, alpha)
-        self._shield_bubble(p, t)
+        self.art.draw(screen, cam, p, "capsule" if world.in_capsule else "player", t, alpha, shadow=shadow)
+        ships.append(p)
 
         for pr in world.projectiles:
             if not cam.visible(pr.pos):
                 continue
             if pr.kind == "torpedo" and pr.side != "player" and p.pos.distance_to(pr.pos) > vis * 0.6:
                 continue          # торпеду под водой видно только вблизи
-            self._projectile(pr)
+            self._projectile_body(pr)
 
-        self.fx.draw(screen, cam, "air")
+        self.fx.draw(screen, cam, "air", emissive=False)
         for sm in world.smokes:
             if cam.visible(sm.pos, sm.radius):
                 O.draw_smoke_screen(screen, cam, sm, self.fx, t)
-
         self.ocean.draw_veil(screen, cam, world)
+
+        # --- освещение
+        ambient = ambient_color(world)
+        if self.fx.flash > 0:
+            ambient = P.mix(ambient, (255, 255, 255), self.fx.flash)
+        night = 1.0 - world.daylight()
+        if self.lighting.begin(ambient):
+            self._lights(world, ships, night)
+            self.lighting.apply(screen)
+
+        # --- светящееся поверх освещения
+        self.fx.draw(screen, cam, "air", emissive=True)
+        for pr in world.projectiles:
+            if cam.visible(pr.pos):
+                self._projectile_glow(pr)
+        if night > 0.05:
+            self._nav_lights(ships, night, t)
+        self._shield_bubble(p, t)
+        for s in ships:
+            if s is not p:
+                self._hp_bar(s)
+
         self.ocean.draw_eye_over(screen, cam, world)
         self.ocean.draw_weather(screen, cam, world, self.fx)
         self.fog.draw(screen, cam, p.pos, vis)
@@ -116,6 +150,61 @@ class Renderer:
         if radar > 0:
             pygame.draw.circle(screen, (40, 90, 80), cam.w2s(p.pos), int(cam.px(radar)), 1)
         self._lock_marker(world)
+
+    # --- свет ------------------------------------------------------------
+
+    def _lights(self, world, ships, night):
+        cam, L = self.cam, self.lighting
+        p = world.player
+        t = world.t
+        # корабли: палубные огни, окна, ходовые огни
+        for s in ships:
+            L.light(cam.w2s(s.pos), cam.px(s.radius * 3.2), (120, 120, 110), 0.7 * night)
+            for wp in window_lights(s):
+                L.light(cam.w2s(wp), cam.px(14), (255, 210, 140), 0.8 * night)
+            for pos, col in nav_lights(s):
+                L.light(cam.w2s(pos), cam.px(12), col, 0.9 * night)
+        if world.spotlight and not world.in_capsule:
+            bow = p.pos + Vector2(p.radius, 0).rotate(p.angle)
+            L.spot(cam.w2s(bow), p.angle, cam.px(560), (235, 235, 215))
+            L.light(cam.w2s(bow), cam.px(30), (255, 250, 230), 1.0)
+        # вспышки, взрывы, пожары
+        for pos, radius, col, k in self.fx.lights():
+            if cam.visible(pos, radius):
+                L.light(cam.w2s(pos), cam.px(radius), col, k)
+        for pr in world.projectiles:
+            if cam.visible(pr.pos):
+                col = P.TRACER_EM if pr.dtype == "em" else (255, 190, 120)
+                L.light(cam.w2s(pr.pos), cam.px(26 if pr.kind == "shell" else 44), col, 0.6)
+        # порт, ресурсы, фауна, Око
+        if cam.visible(world.port, 400):
+            for lp, col, r in O.port_lights(world):
+                L.light(cam.w2s(lp), cam.px(r), col, 1.0)
+        for n in world.nodes:
+            if n.kind != "salt" and cam.visible(n.pos, 80):
+                col = {"condensate": (170, 110, 240), "filament": (200, 170, 255), "zero": (255, 255, 255)}[n.kind]
+                L.light(cam.w2s(n.pos), cam.px(60 + n.amount), col, 0.7 + 0.2 * math.sin(t * 2 + n.pos.x))
+        for tx in world.tihodonts:
+            if cam.visible(tx.pos, 200) and p.pos.distance_to(tx.pos) < world.visual_range() + 150:
+                col = (240, 90, 60) if tx.angry else (60, 220, 190)
+                L.light(cam.w2s(tx.pos), cam.px(170), col, 0.55)
+        if cam.visible(world.eye, 900):
+            L.light(cam.w2s(world.eye), cam.px(700), (200, 200, 255), 1.0)
+        for ev in world.events.active:
+            if ev.phase(t) == "active" and ev.data.telegraphed_by_rays and cam.visible(ev.pos, ev.data.radius):
+                L.light(cam.w2s(ev.pos), cam.px(ev.data.radius), (120, 60, 170), 0.6)
+
+    def _nav_lights(self, ships, night, t):
+        """Сами огни — яркие точки поверх темноты; топовый мигает."""
+        cam = self.cam
+        for s in ships:
+            for i, (pos, col) in enumerate(nav_lights(s)):
+                if i == 3 and int(t * 1.5) % 2:
+                    continue
+                c = cam.w2s(pos)
+                img = self.fx.glow(P.shade(col, 0.5 * night), cam.px(4))
+                self.screen.blit(img, img.get_rect(center=c), special_flags=pygame.BLEND_ADD)
+                pygame.draw.circle(self.screen, col, c, max(1, int(cam.px(0.7))))
 
     # --------------------------------------------------------------------
 
@@ -149,19 +238,26 @@ class Renderer:
         pygame.draw.circle(layer, (*P.SHIELD_HIT, int(a * k + 10)), (r + 2, r + 2), int(r), max(1, int(cam.zoom)))
         self.screen.blit(layer, layer.get_rect(center=s))
 
-    def _projectile(self, pr):
+    def _projectile_body(self, pr):
+        """Несветящаяся часть: корпус ракеты, след торпеды."""
         cam, screen = self.cam, self.screen
         s = cam.w2s(pr.pos)
         d = pr.vel.normalize() if pr.vel.length_squared() else Vector2(1, 0)
         if pr.kind == "missile":
-            tail = s - d * cam.px(4)
-            pygame.draw.line(screen, (190, 190, 196), s, tail, max(2, int(cam.px(1.4))))
-            img = self.fx.glow((255, 170, 90) if not pr.lost else (140, 110, 90), cam.px(4))
-            screen.blit(img, img.get_rect(center=tail), special_flags=pygame.BLEND_ADD)
+            pygame.draw.line(screen, (190, 190, 196), s, s - d * cam.px(4), max(2, int(cam.px(1.4))))
         elif pr.kind == "torpedo":
             pygame.draw.line(screen, (40, 70, 84), s, s - d * cam.px(9), max(2, int(cam.px(2.2))))
             pygame.draw.line(screen, (120, 170, 190), s, s - d * cam.px(4), 1)
-        else:
+
+    def _projectile_glow(self, pr):
+        """Светящаяся часть: трассеры и факел ракеты — видны и ночью."""
+        cam, screen = self.cam, self.screen
+        s = cam.w2s(pr.pos)
+        d = pr.vel.normalize() if pr.vel.length_squared() else Vector2(1, 0)
+        if pr.kind == "missile":
+            img = self.fx.glow((255, 170, 90) if not pr.lost else (140, 110, 90), cam.px(4))
+            screen.blit(img, img.get_rect(center=s - d * cam.px(4)), special_flags=pygame.BLEND_ADD)
+        elif pr.kind == "shell":
             col = P.TRACER_PLAYER if pr.side == "player" else P.TRACER_PIRATE
             if pr.dtype == "em":
                 col = P.TRACER_EM

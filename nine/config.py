@@ -46,3 +46,9 @@ TRAUMA_RADAR_MULT = 0.8
 MEDICAL_COST = 150
 REPAIR_COST_PER_HP = 1.5
 CLEAN_COST = 60
+
+# Сутки: полный цикл в секундах игрового времени; 0 — полночь, 0.25 — рассвет, 0.5 — полдень
+DAY_LENGTH = 480.0
+START_TIME_OF_DAY = 0.30
+NIGHT_VISION = 0.5          # ночью обзор падает до этой доли
+SPOTLIGHT_SIGNATURE = 1.7   # включённый прожектор ночью видно издалека

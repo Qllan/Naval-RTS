@@ -302,12 +302,13 @@ class ShipArt:
             m = self.masters[key] = build_hull(ship.hull.key, pal_key, static, dmg)
         return key, m
 
-    def draw(self, screen, cam, ship, pal_key, t=0.0, alpha=255):
+    def draw(self, screen, cam, ship, pal_key, t=0.0, alpha=255, shadow=Vector2(3, 4)):
+        """shadow — смещение тени в пикселях (по солнцу); None — без тени (ночь)."""
         key, (hull_img, shadow_img) = self._hull_master(ship, pal_key)
         center = cam.w2s(ship.pos)
-        # крен/затопление: корабль «садится» — темнее
-        sh = self._rotated(("shadow",) + key, shadow_img, ship.angle, cam.zoom)
-        screen.blit(sh, sh.get_rect(center=center + Vector2(4, 6) * cam.zoom * 0.7))
+        if shadow is not None:
+            sh = self._rotated(("shadow",) + key, shadow_img, ship.angle, cam.zoom)
+            screen.blit(sh, sh.get_rect(center=center + shadow))
         img = self._rotated(key, hull_img, ship.angle, cam.zoom)
         if ship.water > 0.05 or alpha < 255:
             img = img.copy()
@@ -343,6 +344,30 @@ class ShipArt:
             else:
                 d = Vector2(1, 0).rotate(t * 220) * cam.px(2.6)
                 pygame.draw.line(screen, (170, 200, 205), base - d, base + d, max(1, int(cam.px(0.6))))
+
+
+NAV_RED, NAV_GREEN, NAV_WHITE = (255, 60, 50), (60, 255, 120), (255, 245, 220)
+
+
+def nav_lights(ship):
+    """Ходовые огни: красный — левый борт, зелёный — правый, белый — топовый и кормовой."""
+    key = ship.hull.key
+    prof = PROFILES[key]
+    half = max(y for _, y in prof)
+    mid = next((x for x, y in prof if y >= half * 0.95), 0)
+    stern = prof[-1][0]
+    mx, my = MAST.get(key, (0, 0))
+    pts = [((mid, -half), NAV_RED), ((mid, half), NAV_GREEN), ((stern, 0), NAV_WHITE), ((mx, my), NAV_WHITE)]
+    return [(ship.pos + Vector2(x, y).rotate(ship.angle), col) for (x, y), col in pts]
+
+
+def window_lights(ship):
+    """Центры освещённых окон надстроек (для света ночью)."""
+    out = []
+    for sx, sy, lx, ly, windows in SUPERSTRUCTURE.get(ship.hull.key, []):
+        if windows:
+            out.append(ship.pos + Vector2(sx + lx / 2, sy).rotate(ship.angle))
+    return out
 
 
 def hull_length(hull_key):

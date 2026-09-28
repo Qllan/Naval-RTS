@@ -115,8 +115,10 @@ class FX:
 
     # --- порождение -------------------------------------------------------
 
+    max_particles = MAX_PARTICLES
+
     def add(self, *a, **kw):
-        if len(self.particles) < MAX_PARTICLES:
+        if len(self.particles) < self.max_particles:
             self.particles.append(Particle(*a, **kw))
 
     def _rv(self, speed):
@@ -251,6 +253,13 @@ class FX:
             elif pr.kind == "torpedo" and rng.random() < 0.5:
                 self.add(pr.pos + self._rv(3), Vector2(), 0.9, 1.2, P.FOAM, "dot", layer="water")
 
+    def lights(self):
+        """Светящиеся частицы как источники света: (позиция, радиус в мире, цвет, сила)."""
+        for p in self.particles:
+            if p.kind in ("glow", "fire"):
+                k = p.life / p.max_life
+                yield p.pos, p.size * 3.5, p.color, k
+
     # --- шаг и отрисовка ------------------------------------------------------
 
     def update(self, dt):
@@ -267,10 +276,15 @@ class FX:
         self.particles = keep
         self.flash = max(0.0, self.flash - dt * 4)
 
-    def draw(self, screen, cam, layer):
+    EMISSIVE = ("glow", "fire", "spark")
+
+    def draw(self, screen, cam, layer, emissive=None):
+        """emissive=None — всё; True — только светящиеся частицы; False — только несветящиеся."""
         zoom = cam.zoom
         for p in self.particles:
             if p.layer != layer or not cam.visible(p.pos, 40):
+                continue
+            if emissive is not None and (p.kind in self.EMISSIVE) != emissive:
                 continue
             k = p.life / p.max_life
             s = cam.w2s(p.pos)

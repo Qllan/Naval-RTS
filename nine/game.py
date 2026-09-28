@@ -34,6 +34,7 @@ class Game:
         self.pending_activate = []
         self.pending_pips = []
         self.pending_ammo = False
+        self.pending_spot = False
 
     # --------------------------------------------------------------------
 
@@ -51,6 +52,7 @@ class Game:
         ctl.activate, self.pending_activate = self.pending_activate, []
         ctl.pips, self.pending_pips = self.pending_pips, []
         ctl.cycle_ammo, self.pending_ammo = self.pending_ammo, False
+        ctl.toggle_spotlight, self.pending_spot = self.pending_spot, False
         return ctl
 
     def handle_events(self):
@@ -85,6 +87,11 @@ class Game:
                     self.pending_pips.append(PIP_KEYS[e.key])
                 elif e.key == pygame.K_t:
                     self.pending_ammo = True
+                elif e.key == pygame.K_l:
+                    self.pending_spot = True
+                elif e.key == pygame.K_F10:
+                    self.renderer.toggle_quality()
+                    self.world.say(f"Графика: {'высокое' if self.renderer.high_quality else 'низкое'} качество")
 
     def step(self, dt):
         if not self.docked:

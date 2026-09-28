@@ -206,6 +206,14 @@ def icon(screen, kind, center, size=14, color=TEXT):
         pygame.draw.line(screen, color, c + Vector2(0, -s), c + Vector2(0, s * 0.3), w + 1)
         pygame.draw.polygon(screen, color, [c + Vector2(-s * 0.4, s * 0.1), c + Vector2(s * 0.4, s * 0.1),
                                             c + Vector2(0, s)], w)
+    elif kind == "sun":
+        pygame.draw.circle(screen, color, c, s * 0.45)
+        for a in range(0, 360, 45):
+            d = Vector2(1, 0).rotate(a)
+            pygame.draw.line(screen, color, c + d * s * 0.65, c + d * s, w)
+    elif kind == "moon":
+        pygame.draw.circle(screen, color, c, s * 0.8)
+        pygame.draw.circle(screen, (5, 9, 14), c + Vector2(s * 0.4, -s * 0.25), s * 0.7)
     else:
         pygame.draw.circle(screen, color, c, s * 0.6, w)
 

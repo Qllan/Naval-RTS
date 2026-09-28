@@ -74,6 +74,7 @@ class Ocean:
         self._wisp_zoom = None
         self.frame = 0
         self._screen_layer = None
+        self.wisps_enabled = True
 
     def _layer(self, cam):
         """Переиспользуемый полноэкранный прозрачный слой."""
@@ -151,10 +152,12 @@ class Ocean:
         zoom_changed = self._mask_zoom is None or abs(cam.zoom / self._mask_zoom - 1) > 0.03
         if self.mask_small is None or zoom_changed or self.frame % VEIL_EVERY == 0:
             self._rebuild_tint(cam, world)
-        if self._wisp_zoom is None or zoom_changed or self.frame % VEIL_EVERY == VEIL_EVERY // 2:
+        if self.wisps_enabled and (self._wisp_zoom is None or zoom_changed
+                                   or self.frame % VEIL_EVERY == VEIL_EVERY // 2):
             self._rebuild_wisps(cam, world)
         screen.blit(self.tint_big, cam.w2s(self._mask_origin))
-        screen.blit(self.wisps, cam.w2s(self._wisp_origin))
+        if self.wisps_enabled:
+            screen.blit(self.wisps, cam.w2s(self._wisp_origin))
 
     def _rebuild_tint(self, cam, world):
         cw, ch = cam.w // MASK_CELL_PX + 3, cam.h // MASK_CELL_PX + 3

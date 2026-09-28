@@ -212,3 +212,19 @@ def test_trauma_slows_reload(world):
     world.heal()
     step(world, Controls(), 1 / 60)
     assert world.player.reload_mult() == pytest.approx(1.0)
+
+
+def test_day_night_cycle_changes_vision_and_spotlight_trades_stealth(world):
+    world.player.pos = Vector2(C.PORT_POS)
+    world.t = (0.5 - C.START_TIME_OF_DAY) * C.DAY_LENGTH          # полдень
+    assert world.daylight() == pytest.approx(1.0)
+    day_vis, day_sig = world.visual_range(), world.player_signature()
+    world.t = (1.0 - C.START_TIME_OF_DAY) * C.DAY_LENGTH          # полночь
+    assert world.daylight() == pytest.approx(0.0)
+    assert world.clock() == "00:00"
+    assert world.visual_range() < day_vis * 0.6
+    assert world.player_signature() < day_sig
+    step(world, Controls(toggle_spotlight=True), 1 / 60)
+    assert world.spotlight
+    assert world.visual_range() > day_vis * 0.8
+    assert world.player_signature() > day_sig

@@ -152,3 +152,16 @@ def draw_smoke_screen(screen, cam, sm, fx, t):
         off = Vector2(1, 0).rotate(a) * sm.radius * (0.25 + 0.45 * ((i * 37) % 10) / 10)
         img = fx.puff((110, 114, 118), cam.px(sm.radius * 0.55), 150 * k)
         screen.blit(img, img.get_rect(center=cam.w2s(sm.pos + off)))
+
+
+def port_lights(world):
+    """Источники света порта: прожекторы, окна, буйки. (позиция, цвет, радиус в мире)."""
+    pos = world.port
+    out = [(pos + Vector2(x, -30), (255, 230, 170), 120) for x in (-40, 40)]
+    out += [(pos + Vector2(-62 + i * 26, 34), (255, 210, 140), 40) for i in range(5)]
+    t = world.t
+    for i in range(16):
+        if (int(t * 1.5) + i) % 4 == 0:
+            a = math.radians(i * 22.5 + t * 2)
+            out.append((pos + Vector2(math.cos(a), math.sin(a)) * C.PORT_RADIUS, (255, 200, 90), 45))
+    return out

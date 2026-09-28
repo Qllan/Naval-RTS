@@ -39,6 +39,7 @@ class Controls:
     activate: list = field(default_factory=list)   # номера активных утилит, нажатые в этом кадре
     pips: list = field(default_factory=list)       # "shields" | "engines" | "weapons" | "reset"
     cycle_ammo: bool = False
+    toggle_spotlight: bool = False
 
 
 @dataclass
@@ -71,6 +72,7 @@ class World:
         self.lock_candidate = None
         self.gun_target = None
         self.ammo_type = "std"
+        self.spotlight = False
 
         self.pirates: list[Pirate] = []
         self.tihodonts: list[Tihodont] = []
@@ -153,8 +155,32 @@ class World:
             r *= C.TRAUMA_RADAR_MULT
         return r
 
+    # --- сутки ------------------------------------------------------------
+
+    @property
+    def time_of_day(self):
+        """0..1: 0 — полночь, 0.25 — рассвет, 0.5 — полдень, 0.75 — закат."""
+        return (C.START_TIME_OF_DAY + self.t / C.DAY_LENGTH) % 1.0
+
+    def sun_elevation(self):
+        return math.sin(2 * math.pi * (self.time_of_day - 0.25))
+
+    def daylight(self):
+        """0 — ночь, 1 — день; плавные сумерки."""
+        e = self.sun_elevation()
+        k = min(1.0, max(0.0, (e + 0.15) / 0.4))
+        return k * k * (3 - 2 * k)
+
+    def clock(self):
+        minutes = int(self.time_of_day * 24 * 60)
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
     def visual_range(self):
-        return C.VISUAL_RANGE * (1.0 - 0.55 * self.density_at(self.player.pos))
+        night = 1.0 - self.daylight()
+        light = 1.0 - (1.0 - C.NIGHT_VISION) * night
+        if self.spotlight and night > 0:
+            light = max(light, 0.9)
+        return C.VISUAL_RANGE * (1.0 - 0.55 * self.density_at(self.player.pos)) * light
 
     def sheltering_tihodont(self):
         for tx in self.tihodonts:
@@ -182,6 +208,11 @@ class World:
             sig *= 0.6
         if self.in_smoke(p.pos):
             sig *= 0.3
+        night = 1.0 - self.daylight()
+        if self.spotlight and not self.in_capsule:
+            sig *= 1.0 + (C.SPOTLIGHT_SIGNATURE - 1.0) * night
+        else:
+            sig *= 1.0 - 0.35 * night            # ночью без огней корабль заметить труднее
         if self.sheltering_tihodont() and not self.player_loud():
             sig *= 0.05
         return sig
@@ -222,6 +253,9 @@ class World:
                     p.add_pip(sys_)
             if ctl.cycle_ammo:
                 self.cycle_ammo()
+            if ctl.toggle_spotlight:
+                self.spotlight = not self.spotlight
+                self.say("Прожектор включён — вас видно издалека." if self.spotlight else "Прожектор выключен.")
             self._player_weapons(dt, ctl, density)
             for idx in ctl.activate:
                 self._activate_utility(idx)
@@ -322,6 +356,7 @@ class World:
         if stock[self.ammo_type] == 0:
             self.say(f"{AMMO[self.ammo_type].name} снаряды кончились — стандартные.")
             self.ammo_type = "std"
+        self.spotlight = False
 
     def _activate_utility(self, idx):
         p = self.player
