@@ -40,6 +40,8 @@ class Renderer:
         self.motes = VF.VeilMotes()
         self.sky = VF.SkyGlimpse(self.w, self.h)
         self.distortion = True            # искажения в плотной Пелене (настройка)
+        self.lightning = False
+        self.last_events = []
         self.haze_enabled = True
         self.halos = True
         self.ocean = Ocean()

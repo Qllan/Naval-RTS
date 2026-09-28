@@ -5,6 +5,7 @@ import time
 import pygame
 
 from . import config as C
+from .audio import Audio
 from .gfx import ui
 from .hud import Hud
 from .port_ui import PortUI
@@ -28,7 +29,8 @@ class Game:
         self.world = World(seed)
         self.renderer = Renderer(screen)
         self.hud = Hud(screen, self.world)
-        self.port_ui = PortUI(screen)
+        self.audio = Audio()
+        self.port_ui = PortUI(screen, self.audio)
         self.docked = False
         self.running = True
         self.pending_activate = []
@@ -97,6 +99,7 @@ class Game:
         if not self.docked:
             self.world.update(dt, self.controls())
         self.renderer.draw(self.world)
+        self.audio.update(self.world, self.renderer.last_events, self.renderer.lightning, dt, paused=self.docked)
         if self.docked:
             self.port_ui.draw(self.world)
         else:

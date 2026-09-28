@@ -47,3 +47,17 @@ def test_picker_scrolls_to_selection():
     g.step(1 / 60)                                        # последняя позиция видна и рисуется без ошибок
     assert ui.pick_sel == len(ui.picker_items(w)) - 1
     pygame.quit()
+
+
+def test_audio_synthesizes_and_reacts_to_events():
+    from nine.audio import Audio
+    from nine.world import Controls, World
+    a = Audio()
+    if not a.ok:                                  # без звукового устройства — тихо отключается
+        return
+    for name in ("gun_s", "gun_m", "explosion_l", "hum", "engine", "ui_buy", "hit_hull~"):
+        assert name in a.sounds
+    w = World(seed=1, first_event=1e9)
+    w.update(1 / 60, Controls())
+    a.update(w, [("muzzle", w.player.pos, 0, 1, "gun", "player"), ("explosion", w.player.pos, 3)], True, 1 / 60)
+    a.ui("ui_click")

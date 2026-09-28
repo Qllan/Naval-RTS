@@ -45,7 +45,8 @@ def ship_summary(ship, cargo=0.0):
 
 
 class PortUI:
-    def __init__(self, screen):
+    def __init__(self, screen, audio=None):
+        self.audio = audio
         self.screen = screen
         self.w, self.h = screen.get_size()
         self.art = ShipArt()
@@ -91,6 +92,11 @@ class PortUI:
 
     def say(self, text, color=UI):
         self.message = (text, color)
+        self.sound("ui_error" if color == BAD else "ui_buy" if color == ACCENT else "ui_click")
+
+    def sound(self, name):
+        if self.audio is not None:
+            self.audio.ui(name)
 
     def handle_key(self, key, world):
         """Возвращает 'leave', если игрок хочет выйти в море."""
@@ -112,6 +118,8 @@ class PortUI:
             self.sel = 0
             return None
         n = self._count(world)
+        if key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
+            self.sound("ui_hover")
         if key in (pygame.K_UP, pygame.K_w):
             self._move(-1, n)
         elif key in (pygame.K_DOWN, pygame.K_s):

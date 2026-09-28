@@ -593,6 +593,8 @@ class World:
         for lt in self.loot:
             lt.life -= dt
             if not self.in_capsule and lt.pos.distance_to(p.pos) < 45:
+                if lt.credits:
+                    self.emit("coin")
                 cap.credits += lt.credits
                 lt.credits = 0
                 for key in lt.modules:
