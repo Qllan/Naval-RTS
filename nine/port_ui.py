@@ -14,7 +14,7 @@ from .modules import AMMO, CATEGORY_NAME, MODULES, SIZE_NAME, WeaponDef, module_
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship
 from .world import AMMO_PACK, MODULE_RESALE
 
-UI, DIM, ACCENT, WARN, BAD, GOOD = ui.TEXT, ui.DIM, ui.ACCENT, ui.WARN, ui.BAD, ui.GOOD
+UI, DIM, ACCENT, WARN = ui.TEXT, ui.DIM, ui.ACCENT, ui.WARN
 TAB_ICON = ("utility", "hull", "gun", "cargo")
 
 TABS = ("Сервис", "Верфь", "Оснащение", "Склад")
@@ -92,7 +92,7 @@ class PortUI:
 
     def say(self, text, color=UI):
         self.message = (text, color)
-        self.sound("ui_error" if color == BAD else "ui_buy" if color == ACCENT else "ui_click")
+        self.sound("ui_error" if color == ui.BAD else "ui_buy" if color == ACCENT else "ui_click")
 
     def sound(self, name):
         if self.audio is not None:
@@ -106,7 +106,7 @@ class PortUI:
                 return None
             problems = world.undock_problems()
             if problems:
-                self.say("Нельзя выйти: " + problems[0], BAD)
+                self.say("Нельзя выйти: " + problems[0], ui.BAD)
                 return None
             return "leave"
         if not self.picker and key in (pygame.K_LEFT, pygame.K_a):
@@ -128,7 +128,7 @@ class PortUI:
             self._activate(world)
         elif key in (pygame.K_BACKSPACE, pygame.K_DELETE) and TABS[self.tab] == "Оснащение" and not self.picker:
             err = world.uninstall(self.sel)
-            self.say(err or "Модуль снят и отправлен на склад.", BAD if err else ACCENT)
+            self.say(err or "Модуль снят и отправлен на склад.", ui.BAD if err else ACCENT)
         elif key == pygame.K_g and TABS[self.tab] == "Оснащение" and not self.picker:
             g = world.cycle_group(self.sel)
             if g is None:
@@ -166,7 +166,7 @@ class PortUI:
         elif tab == "Верфь":
             hull = PLAYER_HULLS[self.sel]
             err = world.buy_hull(hull.key)
-            self.say(err or f"Новый корабль: {hull.name}. Старые модули — на складе.", BAD if err else ACCENT)
+            self.say(err or f"Новый корабль: {hull.name}. Старые модули — на складе.", ui.BAD if err else ACCENT)
         elif tab == "Оснащение":
             if not self.picker:
                 self.slot = self.sel
@@ -178,7 +178,7 @@ class PortUI:
                 return
             src, key = items[self.pick_sel]
             err = world.install(self.slot, key, from_storage=(src == "storage"))
-            self.say(err or f"Установлено: {MODULES[key].name}", BAD if err else ACCENT)
+            self.say(err or f"Установлено: {MODULES[key].name}", ui.BAD if err else ACCENT)
             if not err:
                 self.picker = False
         elif tab == "Склад":
@@ -235,7 +235,7 @@ class PortUI:
         ui.icon(self.screen, "credits", (rect.right - 190, rect.y + 27), 16, ui.C_ENERGY)
         ui.text(self.screen, f"{cap.credits} КК", (rect.right - 176, rect.y + 18), UI, 22, True)
         if cap.debt:
-            ui.chip(self.screen, f"ДОЛГ {cap.debt}", (rect.right - 22, rect.y + 44), BAD, 15, anchor="topright")
+            ui.chip(self.screen, f"ДОЛГ {cap.debt}", (rect.right - 22, rect.y + 44), ui.BAD, 15, anchor="topright")
         x = rect.x + 22
         ty = rect.y + 70
         for i, name in enumerate(TABS):
@@ -309,7 +309,7 @@ class PortUI:
                 nv = new[i][1]
                 if abs(nv - val) > 0.5:
                     better = (nv > val) == higher
-                    self.text(f"> {nv:.0f}", (x + 212, y + i * 21), GOOD if better else BAD, self.small)
+                    self.text(f"> {nv:.0f}", (x + 212, y + i * 21), ui.GOOD if better else ui.BAD, self.small)
         y += len(cur) * 21 + 10
         p = world.player
         col = WARN if min(p.subsystems.values()) < 1 else DIM

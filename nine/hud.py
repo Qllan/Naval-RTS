@@ -21,7 +21,7 @@ HELP_LINES = [
     "W/S — ход вперёд/назад     A/D — руль     Shift — форсаж (тратит энергию)     колесо мыши — зум",
     "ЛКМ / Пробел — группа огня 1 (пушки)     ПКМ — группа 2 (держать на цели: захват ракет; торпеды)",
     "1–4 — активные модули   Z/X/C — энергия в щиты/двигатель/орудия, V — поровну   T — тип снарядов",
-    "E (держать) — добыча   L — прожектор   F — порт   F10 — качество графики   H — справка   Esc — выход",
+    "E (держать) — добыча   L — прожектор   F — порт   M — карта   K — кодекс   H — справка   Esc — пауза",
     "",
     "Пелена гуще к северо-востоку, у Ока Девятки. Там дороже ресурсы и слабее сенсоры.",
     "Электроника в Пелене ест больше энергии: если реактор не тянет — гаснут щиты и радар.",
@@ -70,6 +70,13 @@ class Hud:
         self._incoming = []
         self.buttons = []          # [(rect, action)] — кликабельные зоны, пересобираются каждый кадр
         self.panels = []           # прямоугольники панелей: клик по ним не стреляет
+        self.minimap_rect = None
+        self.hints = True
+        self.show_minimap = True
+        self.show_log = True
+        self.keys = None           # Settings — чтобы подсказки показывали назначенные клавиши
+        self._fog = None
+        self._fog_t = -1.0
 
     # --------------------------------------------------------------------
 
@@ -115,11 +122,15 @@ class Hud:
         self._damage_direction(world)
         self._status(world, dt)
         self._zone(world)
-        self._minimap(world)
+        self.minimap_rect = None
+        if self.show_minimap:
+            self._minimap(world)
         self._weapons(world)
-        self._hints(world)
+        if self.hints:
+            self._hints(world)
         self._toasts(world)
-        self._log(world)
+        if self.show_log:
+            self._log(world)
         if self.show_help or world.t < self.help_until:
             self._help()
         self._flashes(dt)
@@ -210,6 +221,11 @@ class Hud:
         for pos, col, label in marks:
             s = cam.w2s(pos)
             if 0 <= s.x <= self.w and 0 <= s.y <= self.h:
+                if label == "Точка":         # путевая точка на экране — ромб над водой
+                    pygame.draw.polygon(self.screen, col, [s + Vector2(0, -9), s + Vector2(7, 0), s + Vector2(0, 9),
+                                                           s + Vector2(-7, 0)], 2)
+                    ui.text(self.screen, f"{int(p.pos.distance_to(pos))} м", s + Vector2(0, 12), col, 14,
+                            anchor="midtop")
                 continue
             c = Vector2(self.w / 2, self.h / 2)
             d = s - c
@@ -407,10 +423,16 @@ class Hud:
     def _minimap(self, world):
         s = self.screen
         n = self.MINIMAP
-        box = ui.panel(self.screen, (self.w - n - 24, 12, n + 12, n + 34), "Карта")
+        box = ui.panel(self.screen, (self.w - n - 24, 12, n + 12, n + 34), "Карта · M")
         self.panels.append(box)
+        self.minimap_rect = box
         x0, y0 = box.x + 6, box.y + 26
         s.blit(self.minimap_bg, (x0, y0))
+        if self._fog is None or world.t - self._fog_t > 0.5 or world.t < self._fog_t:
+            from .screens import fog_surface
+            self._fog = fog_surface(world.memory, n)
+            self._fog_t = world.t
+        s.blit(self._fog, (x0, y0))
         if world.veil.in_dead_zone(world.player.pos):
             veil = pygame.Surface((n, n), pygame.SRCALPHA)
             veil.fill((10, 4, 16, 200))
@@ -421,6 +443,23 @@ class Hud:
         def m(pos):
             return (x0 + pos[0] / C.WORLD_W * n, y0 + pos[1] / C.WORLD_H * n)
 
+        for mk in world.marks.values():
+            if mk["kind"] in ("ruins", "wreck"):
+                col = (200, 110, 90) if mk["kind"] == "ruins" else ui.WARN
+                pygame.draw.circle(s, tuple(int(c * (0.3 + 0.7 * mk["clarity"])) for c in col), m(mk["pos"]), 2)
+        for pi in world.pirates:
+            if world.on_radar(pi.ship.pos) or world.perceives(pi.ship.pos):
+                pygame.draw.circle(s, ui.BAD, m(pi.ship.pos), 2)
+        for ph in world.phantoms:
+            pygame.draw.circle(s, ui.BAD, m(ph["pos"]), 2)
+        for ev in world.events.active:
+            if ev.phase(world.t) == "active" and (ev.covers(world.player.pos) or world.perceives(ev.pos)):
+                pygame.draw.circle(s, ev.data.color, m(ev.pos), max(3, int(ev.data.radius / C.WORLD_W * n)), 1)
+        if world.waypoint is not None:
+            wp = Vector2(m(world.waypoint))
+            pygame.draw.line(s, (120, 110, 70), m(world.player.pos), wp)
+            pygame.draw.polygon(s, (240, 220, 120), [wp + Vector2(0, -4), wp + Vector2(4, 0), wp + Vector2(0, 4),
+                                                     wp + Vector2(-4, 0)])
         pygame.draw.circle(s, ui.ACCENT, m(world.port), 4, 1)
         pygame.draw.circle(s, (240, 240, 250), m(world.eye), 3)
         pygame.draw.circle(s, (140, 90, 190), m(world.eye), int(C.EYE_WALL_R / C.WORLD_W * n), 1)

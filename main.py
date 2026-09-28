@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description="Девятка — прототип морского симулятора")
     parser.add_argument("--seed", type=int, default=9, help="сид генерации мира")
     args = parser.parse_args()
-    Game(seed=args.seed).run()
+    Game(seed=args.seed, menu=True).run()
 
 
 if __name__ == "__main__":

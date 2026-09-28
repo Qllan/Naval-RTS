@@ -78,3 +78,86 @@ def test_hud_pip_click_moves_energy():
     assert g.world.player.pips["engines"] >= before
     assert not g.hud.over_ui((640, 360))
     pygame.quit()
+
+
+def _post_key(key):
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=key, mod=0, unicode=""))
+
+
+def test_screens_open_and_close():
+    from nine.screens import CodexScreen, DeathScreen, MainMenu, MapScreen, PauseMenu, SettingsScreen
+
+    pygame.display.init()
+    pygame.font.init()
+    screen = pygame.display.set_mode((1280, 720))
+    g = Game(seed=4, screen=screen, menu=True)
+    assert isinstance(g.stack[-1], MainMenu)
+    _post_key(pygame.K_RETURN)                       # «Новая игра» при запуске — просто закрыть меню
+    g.handle_events()
+    g.step(1 / 60)
+    assert not g.stack
+    _post_key(pygame.K_ESCAPE)
+    g.handle_events()
+    assert isinstance(g.stack[-1], PauseMenu)
+    t = g.world.t
+    for _ in range(10):
+        g.step(1 / 60)
+    assert g.world.t == t                            # пауза останавливает мир
+    for cls in (SettingsScreen, CodexScreen, MapScreen):
+        g.push(cls(g))
+        for _ in range(12):
+            g.step(1 / 60)
+        _post_key(pygame.K_ESCAPE)
+        g.handle_events()
+        assert isinstance(g.stack[-1], PauseMenu)
+    g.stack.clear()
+    g.world.player.hp = 0
+    for _ in range(int(2.0 * 60)):
+        g.step(1 / 60)
+    assert isinstance(g.stack[-1], DeathScreen)
+    assert g.world.in_capsule
+    pygame.quit()
+
+
+def test_map_click_sets_waypoint_and_settings_persist():
+    from nine.screens import MapScreen, SettingsScreen
+    from nine.settings import Settings
+
+    pygame.display.init()
+    pygame.font.init()
+    screen = pygame.display.set_mode((1280, 720))
+    g = Game(seed=4, screen=screen)
+    m = MapScreen(g)
+    g.push(m)
+    g.step(1 / 60)
+    target = m.w2m((4000, 4000))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(int(target.x), int(target.y))))
+    g.handle_events()
+    assert g.world.waypoint is not None and g.world.waypoint.distance_to((4000, 4000)) < 40
+    g.stack.clear()
+
+    st = SettingsScreen(g)
+    g.push(st)
+    st.tab = 3                                       # управление
+    st.sel = 0
+    _post_key(pygame.K_RETURN)
+    _post_key(pygame.K_i)
+    g.handle_events()
+    assert g.settings.key("forward") == pygame.K_i
+    assert Settings.load().key("forward") == pygame.K_i
+    g.settings.keys["forward"] = "w"
+    g.settings.save()
+    pygame.quit()
+
+
+def test_amnesia_fades_memory_in_dense_veil():
+    from nine.world import World
+
+    w = World(3)
+    assert w.memory.max() == 1.0
+    w.memory[0, 0] = 1.0                             # далёкая разведанная клетка
+    w._update_memory(10.0, 0.95)
+    assert w.memory[0, 0] < 0.9                      # забывается
+    cy, cx = int(w.player.pos.y // 200), int(w.player.pos.x // 200)
+    assert w.memory[cy, cx] == 1.0                   # вокруг корабля — снова видно
+    assert "amnesia" in w.codex

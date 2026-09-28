@@ -16,6 +16,7 @@ class Camera:
         self.zoom = zoom
         self.target_zoom = zoom
         self.shake = 0.0              # амплитуда в пикселях
+        self.shake_scale = 1.0        # настройка «Тряска камеры»
         self._shake_off = Vector2()
         self._rng = random.Random(7)
 
@@ -50,7 +51,7 @@ class Camera:
         self.target_zoom = min(ZOOM_MAX, max(ZOOM_MIN, self.target_zoom * (1.12 ** steps)))
 
     def add_shake(self, amount):
-        self.shake = min(14.0, self.shake + amount)
+        self.shake = min(14.0 * self.shake_scale, self.shake + amount * self.shake_scale)
 
     def update(self, dt, target, lead=Vector2()):
         """Следует за целью с небольшим упреждением по скорости."""

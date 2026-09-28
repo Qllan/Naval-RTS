@@ -23,8 +23,25 @@ C_ENERGY = (236, 212, 96)
 C_FOUL = (170, 100, 220)
 
 
+_NORMAL = {"BAD": BAD, "GOOD": GOOD, "C_HULL": C_HULL}
+_COLORBLIND = {"BAD": (240, 120, 30), "GOOD": (90, 170, 255), "C_HULL": (240, 140, 60)}
+
+
+def configure(opacity=None, colorblind=None, large_font=None):
+    """Настройки доступности: прозрачность панелей, палитра для дальтоников, крупный шрифт."""
+    global PANEL_BG
+    if opacity is not None:
+        PANEL_BG = (5, 9, 14, int(80 + 175 * max(0.0, min(1.0, opacity))))
+    if colorblind is not None:
+        globals().update(_COLORBLIND if colorblind else _NORMAL)
+    if large_font is not None and Fonts.scale != (1.15 if large_font else 1.0):
+        Fonts.scale = 1.15 if large_font else 1.0
+        Fonts.reset()
+
+
 class Fonts:
     _cache = {}
+    scale = 1.0
 
     @classmethod
     def reset(cls):
@@ -36,7 +53,7 @@ class Fonts:
         key = (size, bold)
         f = cls._cache.get(key)
         if f is None:
-            f = pygame.font.Font(None, size)
+            f = pygame.font.Font(None, round(size * cls.scale))
             f.set_bold(bold)
             cls._cache[key] = f
         return f
@@ -71,9 +88,10 @@ def wrap(s, width, size=16):
 _bg_cache = {}
 
 
-def panel(screen, rect, title=None, accent=ACCENT, bg=PANEL_BG):
+def panel(screen, rect, title=None, accent=ACCENT, bg=None):
     """Полупрозрачная панель с тонкой рамкой и уголками акцентного цвета."""
     rect = pygame.Rect(rect)
+    bg = bg or PANEL_BG
     key = (rect.size, bg)
     surf = _bg_cache.get(key)
     if surf is None:

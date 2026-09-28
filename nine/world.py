@@ -5,6 +5,7 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 
+import numpy as np
 from pygame.math import Vector2
 
 from . import config as C
@@ -26,6 +27,8 @@ LOCK_PICK_RADIUS = 260.0        # насколько близко к курсо�
 FIRE_CONTROL_RADIUS = 140.0     # цель ближе к курсору — турели сами берут упреждение
 AMMO_PACK = 100                 # снарядов в одной покупке
 LEAK_REPAIR_COST = 40
+MEMORY_CELL = 200               # клетка «памяти» карты, ед.
+AMNESIA_RATE = 0.05             # скорость забывания карты в самой плотной Пелене, доля/с
 
 
 @dataclass
@@ -96,6 +99,20 @@ class World:
             off = Vector2(1, 0).rotate(i * 90 + 45) * 120
             self.nodes.append(ResourceNode(self.eye + off, "zero", 25))
         self._spawn_tihodonts(16)
+
+        # Навигация и память: разведанная карта, отметки, путевая точка, кодекс
+        self.memory = np.zeros((C.WORLD_H // MEMORY_CELL, C.WORLD_W // MEMORY_CELL), np.float32)
+        self.marks = {"port": {"pos": Vector2(self.port), "label": "Порт беженцев", "kind": "port", "clarity": 1.0}}
+        self.waypoint = None
+        self.codex = {}             # ключ записи → прочитана ли
+        self.last_loss = None       # сводка для экрана гибели
+        self._memory_cd = 0.0
+        for key in ("port", "veil", "ray", "tihodont"):
+            self.codex[key] = False
+        for key in self.player.fit:
+            if key:
+                self.codex[f"module:{key}"] = False
+        self._reveal()
         self.say("Порт беженцев. Нейтральные воды. Удачи, капитан.")
 
     # --- служебное ------------------------------------------------------
@@ -302,8 +319,90 @@ class World:
             s.life -= dt
         self.smokes = [s for s in self.smokes if s.life > 0]
 
+        self._update_memory(dt, density)
         if not p.alive:
             self._on_player_destroyed()
+
+    # --- память, карта и кодекс ----------------------------------------------
+
+    def discover(self, key):
+        """Открывает запись кодекса. Возвращает True, если она новая."""
+        if key in self.codex:
+            return False
+        self.codex[key] = False
+        from .codex import entry
+        e = entry(key)
+        if e:
+            self.say(f"Кодекс: {e[1]}", "event")
+        return True
+
+    def mark(self, key, pos, label, kind):
+        m = self.marks.get(key)
+        if m is None:
+            self.marks[key] = {"pos": Vector2(pos), "label": label, "kind": kind, "clarity": 1.0}
+        else:
+            m["clarity"] = 1.0
+
+    def _reveal(self):
+        """Открывает на карте клетки в пределах видимости."""
+        p = self.player
+        r = max(self.visual_range(), 300.0)
+        h, w = self.memory.shape
+        cx, cy = p.pos.x / MEMORY_CELL, p.pos.y / MEMORY_CELL
+        rc = r / MEMORY_CELL
+        x0, x1 = max(0, int(cx - rc)), min(w, int(cx + rc) + 1)
+        y0, y1 = max(0, int(cy - rc)), min(h, int(cy + rc) + 1)
+        if x0 >= x1 or y0 >= y1:
+            return
+        ys, xs = np.mgrid[y0:y1, x0:x1]
+        near = (xs + 0.5 - cx) ** 2 + (ys + 0.5 - cy) ** 2 <= rc * rc
+        self.memory[y0:y1, x0:x1][near] = 1.0
+
+    def _update_memory(self, dt, density):
+        self._memory_cd -= dt
+        if self._memory_cd > 0:
+            return
+        step = 0.25 - self._memory_cd
+        self._memory_cd = 0.25
+        p = self.player
+        # амнезия: в плотной Пелене разведанное выцветает — и карта, и отметки
+        if density > C.ZONE_DENSE:
+            k = math.exp(-AMNESIA_RATE * step * (density - C.ZONE_DENSE) / (1 - C.ZONE_DENSE))
+            self.memory *= k
+            for m in self.marks.values():
+                if m["kind"] != "port":
+                    m["clarity"] = max(0.15, m["clarity"] * k)
+            if density > 0.75:
+                self.discover("amnesia")
+        self._reveal()
+        if self.waypoint is not None and p.pos.distance_to(self.waypoint) < 120:
+            self.waypoint = None
+            self.say("Путевая точка достигнута.")
+        # открытия для кодекса и отметок
+        vis = self.visual_range()
+        if density >= C.ZONE_MIST:
+            self.discover("zone:mist")
+        if density >= C.ZONE_DENSE:
+            self.discover("zone:dense")
+        if p.fouling > 0.05:
+            self.discover("fouling")
+        if self.phantoms:
+            self.discover("phantoms")
+        if p.pos.distance_to(self.eye) < C.EYE_WALL_R + vis:
+            self.discover("eye")
+            self.mark("eye", self.eye, "Око Девятки", "eye")
+        for i, isl in enumerate(self.islands):
+            if isl.ruins and p.pos.distance_to(isl.pos) < vis + isl.radius:
+                self.discover("ruins")
+                self.mark(f"ruins{i}", isl.pos, "Руины Эры I", "ruins")
+        for pi in self.pirates:
+            if self.perceives(pi.ship.pos) or self.on_radar(pi.ship.pos):
+                self.discover(f"enemy:{pi.loadout}")
+        for ev in self.events.active:
+            if ev.phase(self.t) == "active" and (ev.covers(p.pos) or self.perceives(ev.pos)):
+                self.discover(f"event:{ev.data.name}")
+        for kind in self.captain.cargo:
+            self.discover(f"res:{kind}")
 
     def _eye_effects(self, dt):
         p = self.player
@@ -612,6 +711,7 @@ class World:
                 lt.credits = 0
                 for key in lt.modules:
                     cap.storage.append(key)
+                    self.discover(f"module:{key}")
                     self.say(f"Трофей: {MODULES[key].name} (на склад порта)")
                 lt.modules = []
                 for kind, qty in list(lt.cargo.items()):
@@ -636,6 +736,8 @@ class World:
         if not self.in_capsule:
             self.emit("wreck", self.player, "player")
         if self.in_capsule:
+            self.last_loss = {"kind": "capsule", "debt": C.CAPSULE_DEBT, "t": self.t,
+                              "cargo": sum(RESOURCES[k].price * v for k, v in cap.cargo.items())}
             cap.debt += C.CAPSULE_DEBT
             cap.trauma = True
             cap.cargo = {}
@@ -647,7 +749,14 @@ class World:
         salvage = {k: v * 0.5 for k, v in cap.cargo.items() if v * 0.5 >= 1}
         if salvage:
             self.loot.append(Loot(pos, salvage, 0, life=40.0))
+        self.last_loss = {"kind": "ship", "hull": self.player.hull.name, "t": self.t,
+                          "cargo": int(sum(RESOURCES[k].price * v for k, v in cap.cargo.items())),
+                          "salvage": int(sum(RESOURCES[k].price * v for k, v in salvage.items())),
+                          "insurance": int(self.player.value * C.INSURANCE_RATE), "kills": cap.kills}
         cap.cargo = {}
+        if salvage:
+            self.mark("wreck", pos, "Обломки корабля", "wreck")
+            self.discover("wreck")
         cap.pending_insurance = int(self.player.value * C.INSURANCE_RATE)
         self.player = Ship("capsule", pos, self.player.angle)
         self.in_capsule = True
@@ -825,6 +934,7 @@ class World:
         if old:
             cap.storage.append(old)
         p.set_module(slot_index, key)
+        self.discover(f"module:{key}")
         # новые модули приходят заряженными
         for w in p.weapons:
             if w.index == slot_index:
