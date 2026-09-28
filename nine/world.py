@@ -100,8 +100,20 @@ class World:
 
     # --- служебное ------------------------------------------------------
 
-    def say(self, text):
-        self.log.append((text, self.t))
+    BAD_WORDS = ("Пожар", "Пробоина", "Повреждение", "Ракета!", "потерян", "уничтожена", "ЭМ-вспышка",
+                 "Удар о скалы", "разбужен", "кончились")
+    GOOD_WORDS = ("потоплен", "Трофей", "Страховка", "подобраны", "выполнена")
+
+    def say(self, text, level=None):
+        """Сообщение игроку. level: info | good | bad | event (по умолчанию — по ключевым словам)."""
+        if level is None:
+            if any(w in text for w in self.BAD_WORDS):
+                level = "bad"
+            elif any(w in text for w in self.GOOD_WORDS):
+                level = "good"
+            else:
+                level = "info"
+        self.log.append((text, self.t, level))
 
     def emit(self, *event):
         self.fx.append(event)
@@ -243,7 +255,7 @@ class World:
         self.events.update(self.t, p.pos)
         for ev in self.events.started:
             if ev.covers(p.pos) or self.perceives(ev.pos):
-                self.say(f"{ev.data.name}!")
+                self.say(f"{ev.data.name}!", "event")
                 if ev.data.name == "Штиль" and ev.covers(p.pos):
                     self.emit("sky")
             if ev.data.name == "Цветение":
@@ -552,10 +564,11 @@ class World:
                     break
             if hit is not None:
                 fires, leaks = hit.fires, hit.leaks
-                armor, hp = hit.armor, hit.hp
+                armor, hp, shield = hit.armor, hit.hp, hit.shield
                 sub = hit.apply_damage(pr.damage, pr.dtype, self.rng, pr.ammo)
                 layer = "hull" if hit.hp < hp else "armor" if hit.armor < armor else "shield"
-                self.emit("hit", Vector2(pr.pos), layer, pr.dtype, pr.kind, hit)
+                dealt = (shield - hit.shield) + (armor - hit.armor) + (hp - hit.hp)
+                self.emit("hit", Vector2(pr.pos), layer, pr.dtype, pr.kind, hit, dealt, Vector2(pr.owner.pos))
                 if pr.kind != "shell":
                     self.emit("explosion", Vector2(pr.pos), 2 if pr.kind == "torpedo" else 1)
                 if hit is p:

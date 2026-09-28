@@ -2,7 +2,7 @@
 
 События мира (кортежи):
     ("muzzle", pos, angle, size, kind, side)
-    ("hit", pos, layer, dtype, kind, ship)       layer: shield | armor | hull
+    ("hit", pos, layer, dtype, kind, ship, урон, откуда)   layer: shield | armor | hull
     ("splash", pos, kind)
     ("explosion", pos, size)                     1 — ракета, 2 — торпеда, 3 — гибель корабля
     ("ecm", pos, radius)
@@ -147,8 +147,10 @@ class FX:
                 if side == "player" and wkind == "gun" and size > 1:
                     cam.add_shake(0.8)
             elif kind == "hit":
-                _, pos, layer, dtype, pkind, ship = ev
+                _, pos, layer, dtype, pkind, ship = ev[:6]
                 self._hit(pos, layer, dtype, pkind, ship)
+                if len(ev) > 6 and ev[6] >= 0.5:
+                    self._number(pos, ev[6], layer, ship is player)
                 if ship is player:
                     cam.add_shake(2.5 if pkind == "shell" else 5.0)
             elif kind == "splash":
@@ -202,6 +204,19 @@ class FX:
                 self.add(pos, self._rv(40) + ship.vel * 0.5, 1.2, 2.5, P.SMOKE, "smoke", grow=9, drag=1.5)
 
     art = None                     # ShipArt; подключает отрисовка
+    numbers = True                 # числа урона (настройка)
+
+    def _number(self, pos, amount, layer, on_player):
+        """Всплывающее число урона: цвет — по слою защиты; урон по игроку — крупнее и красным."""
+        if not self.numbers:
+            return
+        col = {"shield": (120, 190, 255), "armor": (230, 200, 130), "hull": (255, 110, 90)}[layer]
+        if on_player:
+            col = (255, 80, 70) if layer != "shield" else (140, 170, 255)
+        p = Particle(pos + self._rv(6), Vector2(self.rng.uniform(-10, 10), -38), 0.9, 1.0, col, "text", drag=1.2)
+        p.image = f"{amount:.0f}"
+        if len(self.particles) < self.max_particles + 100:
+            self.particles.append(p)
 
     def _wreck(self, ship, pal):
         """Корпус раскалывается: нос и корма расходятся, крутятся и тонут; обломки и масло."""
@@ -320,7 +335,7 @@ class FX:
         self.particles = keep + bubbles[:max(0, self.max_particles - len(keep))]
         self.flash = max(0.0, self.flash - dt * 4)
 
-    EMISSIVE = ("glow", "fire", "spark")
+    EMISSIVE = ("glow", "fire", "spark", "text")
 
     def draw(self, screen, cam, layer, emissive=None):
         """emissive=None — всё; True — только светящиеся частицы; False — только несветящиеся."""
@@ -356,6 +371,11 @@ class FX:
                 if a < 250:
                     img = img.copy()
                     img.set_alpha(a)
+                screen.blit(img, img.get_rect(center=s))
+            elif p.kind == "text":
+                from . import ui
+                img = ui.Fonts.get(17, True).render(p.image, True, p.color)
+                img.set_alpha(int(255 * min(1.0, k * 2)))
                 screen.blit(img, img.get_rect(center=s))
             elif p.kind == "slick":
                 img = self.puff(p.color, r, 110 * min(1.0, k * 3))

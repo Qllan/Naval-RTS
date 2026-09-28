@@ -229,7 +229,7 @@ class Audio:
                 name = {"missile": "missile", "torpedo": "torpedo"}.get(wkind, "gun_m" if size > 1 else "gun_s")
                 self.play(name, pos, me, 0.9 if side == "player" else 0.6)
             elif kind == "hit":
-                _, pos, layer, dtype, pkind, ship = ev
+                _, pos, layer, dtype, pkind, ship = ev[:6]
                 self.play("hit_shield" if layer == "shield" else "hit_hull", pos, me, 1.0 if ship is p else 0.6)
                 if ship is p and layer == "hull" and p.hp < p.hull.hp * 0.3:
                     self.play("alarm", volume=0.5)

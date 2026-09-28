@@ -47,8 +47,9 @@ class Game:
         ctl.throttle = (1.0 if keys[pygame.K_w] or keys[pygame.K_UP] else 0.0) - (1.0 if keys[pygame.K_s] or keys[pygame.K_DOWN] else 0.0)
         ctl.turn = (1.0 if keys[pygame.K_d] or keys[pygame.K_RIGHT] else 0.0) - (1.0 if keys[pygame.K_a] or keys[pygame.K_LEFT] else 0.0)
         ctl.boost = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
-        ctl.fire = mouse[0] or keys[pygame.K_SPACE]
-        ctl.fire2 = mouse[2]
+        over_ui = self.hud.over_ui(pygame.mouse.get_pos())   # клик по панели не стреляет
+        ctl.fire = (mouse[0] and not over_ui) or keys[pygame.K_SPACE]
+        ctl.fire2 = mouse[2] and not over_ui
         ctl.mine = keys[pygame.K_e]
         ctl.aim = self.renderer.s2w(pygame.mouse.get_pos())
         ctl.activate, self.pending_activate = self.pending_activate, []
@@ -61,6 +62,8 @@ class Game:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 self.running = False
+            elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and not self.docked:
+                self.hud_click(e.pos)
             elif e.type == pygame.MOUSEWHEEL and not self.docked:
                 self.renderer.cam.zoom_by(e.y)
             elif e.type == pygame.KEYDOWN:
@@ -95,6 +98,18 @@ class Game:
                     self.renderer.toggle_quality()
                     self.world.say(f"Графика: {'высокое' if self.renderer.high_quality else 'низкое'} качество")
 
+    def hud_click(self, pos):
+        action = self.hud.action_at(pos)
+        if action is None:
+            return
+        self.audio.ui("ui_click")
+        if action[0] == "pip":
+            self.pending_pips.append(action[1])
+        elif action[0] == "ammo":
+            self.pending_ammo = True
+        elif action[0] == "utility":
+            self.pending_activate.append(action[1])
+
     def step(self, dt):
         if not self.docked:
             self.world.update(dt, self.controls())
@@ -103,7 +118,7 @@ class Game:
         if self.docked:
             self.port_ui.draw(self.world)
         else:
-            self.hud.draw(self.world, self.docked)
+            self.hud.draw(self.world, self.docked, self.renderer.cam, self.renderer.last_events)
 
     def run(self):
         while self.running:

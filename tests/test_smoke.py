@@ -61,3 +61,20 @@ def test_audio_synthesizes_and_reacts_to_events():
     w.update(1 / 60, Controls())
     a.update(w, [("muzzle", w.player.pos, 0, 1, "gun", "player"), ("explosion", w.player.pos, 3)], True, 1 / 60)
     a.ui("ui_click")
+
+
+def test_hud_pip_click_moves_energy():
+    pygame.display.init()
+    pygame.font.init()
+    screen = pygame.display.set_mode((1280, 720))
+    g = Game(seed=4, screen=screen)
+    g.step(1 / 60)
+    pip = next((r for r, a in g.hud.buttons if a == ("pip", "engines")), None)
+    assert pip is not None
+    assert g.hud.over_ui(pip.center)
+    before = g.world.player.pips["engines"]
+    g.hud_click(pip.center)
+    g.step(1 / 60)
+    assert g.world.player.pips["engines"] >= before
+    assert not g.hud.over_ui((640, 360))
+    pygame.quit()

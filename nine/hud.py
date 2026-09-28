@@ -35,6 +35,21 @@ PIP_COLOR = {"shields": ui.C_SHIELD, "engines": ui.ACCENT, "weapons": ui.WARN}
 P_WARN_DARK = (150, 110, 60)
 
 
+P_SHIELD_HIT = (110, 190, 255)
+
+
+def P_mix(a, b, k):
+    return tuple(int(x + (y - x) * max(0.0, min(1.0, k))) for x, y in zip(a, b))
+
+
+def _smear(text, k, seed):
+    """Размыть часть букв (амнезия в плотной Пелене)."""
+    import random
+    rng = random.Random(seed)
+    glyphs = "~=·-"
+    return "".join(ch if ch == " " or rng.random() > k * 0.7 else rng.choice(glyphs) for ch in text)
+
+
 def health_color(v):
     return ui.TEXT if v > 0.95 else ui.WARN if v > 0.5 else ui.BAD
 
@@ -49,6 +64,12 @@ class Hud:
         self.show_help = False
         self.help_until = 12.0
         self._ghost = {}           # «призрак» недавнего значения шкалы — видно, сколько сняли
+        self._last = {}
+        self._popups = []
+        self._flash_until = {}
+        self._incoming = []
+        self.buttons = []          # [(rect, action)] — кликабельные зоны, пересобираются каждый кадр
+        self.panels = []           # прямоугольники панелей: клик по ним не стреляет
 
     # --------------------------------------------------------------------
 
@@ -81,24 +102,156 @@ class Hud:
 
     # --------------------------------------------------------------------
 
-    def draw(self, world, docked):
+    def draw(self, world, docked, cam=None, events=(), mouse=None):
         if docked:
             return
         dt = 1 / 60
+        self.buttons, self.panels = [], []
+        self.mouse = mouse if mouse is not None else pygame.mouse.get_pos()
+        self._track_numbers(world, dt)
+        self._track_hits(world, events, dt)
+        if cam is not None:
+            self._edge_markers(world, cam)
+        self._damage_direction(world)
         self._status(world, dt)
         self._zone(world)
         self._minimap(world)
         self._weapons(world)
         self._hints(world)
+        self._toasts(world)
         self._log(world)
         if self.show_help or world.t < self.help_until:
             self._help()
+        self._flashes(dt)
+
+    # --- обратная связь -----------------------------------------------------------
+
+    def _button(self, rect, action):
+        """Регистрирует кликабельную зону; возвращает True, если над ней курсор."""
+        r = pygame.Rect(rect)
+        self.buttons.append((r, action))
+        return r.collidepoint(self.mouse)
+
+    def action_at(self, pos):
+        for r, action in self.buttons:
+            if r.collidepoint(pos):
+                return action
+        return None
+
+    def over_ui(self, pos):
+        return self.action_at(pos) is not None or any(r.collidepoint(pos) for r in self.panels)
+
+    def _track_numbers(self, world, dt):
+        """Вспышка при изменении кредитов и груза: «+120» всплывает рядом со значением."""
+        cap = world.captain
+        cur = {"credits": cap.credits, "cargo": int(world.cargo_used)}
+        for key, val in cur.items():
+            old = self._last.get(key)
+            if old is not None and val != old:
+                pos = (120, 222) if key == "credits" else (230, 222)
+                self._popups.append([f"{val - old:+d}", pos, 1.2, ui.GOOD if val > old else ui.BAD])
+                self._flash_until[key] = 0.6
+            self._last[key] = val
+        for k in list(self._flash_until):
+            self._flash_until[k] -= dt
+
+    def _flashes(self, dt):
+        keep = []
+        for item in self._popups:
+            label, (x, y), life, col = item
+            item[2] -= dt
+            if item[2] <= 0:
+                continue
+            k = item[2] / 1.2
+            img = ui.Fonts.get(18, True).render(label, True, col)
+            img.set_alpha(int(255 * min(1.0, k * 2)))
+            self.screen.blit(img, (x, y - (1 - k) * 26))
+            keep.append(item)
+        self._popups = keep
+
+    def _track_hits(self, world, events, dt):
+        """Запоминаем, откуда прилетело, — для индикатора направления урона."""
+        p = world.player
+        for ev in events:
+            if ev[0] == "hit" and ev[5] is p and len(ev) > 7:
+                d = ev[7] - p.pos
+                if d.length_squared() > 1:
+                    self._incoming.append([Vector2(1, 0).angle_to(d), 1.0, ev[2]])
+        for item in self._incoming:
+            item[1] -= dt
+        self._incoming = [i for i in self._incoming if i[1] > 0][-8:]
+
+    def _damage_direction(self, world):
+        """Красные дуги вокруг центра экрана — со стороны, откуда бьют."""
+        if not self._incoming:
+            return
+        c = (self.w / 2, self.h / 2)
+        r = 86
+        for ang, life, layer in self._incoming:
+            col = P_SHIELD_HIT if layer == "shield" else ui.BAD
+            a = math.radians(-ang)
+            rect = pygame.Rect(c[0] - r, c[1] - r, r * 2, r * 2)
+            w = max(1, int(5 * life))
+            pygame.draw.arc(self.screen, P_mix(ui.FAINT, col, life), rect, a - 0.35, a + 0.35, w)
+
+    def _edge_markers(self, world, cam):
+        """Стрелки у края экрана: порт, путевая точка, контакты радара, сигнатуры событий."""
+        p = world.player
+        marks = [(world.port, ui.ACCENT, "Порт")]
+        if getattr(world, "waypoint", None) is not None:
+            marks.append((world.waypoint, ui.C_ENERGY, "Точка"))
+        radar = world.radar_range()
+        for pr in world.pirates:
+            if p.pos.distance_to(pr.ship.pos) < radar:
+                marks.append((pr.ship.pos, ui.BAD, None))
+        for ph in world.phantoms:
+            marks.append((ph["pos"], ui.BAD, None))
+        margin = 30
+        for pos, col, label in marks:
+            s = cam.w2s(pos)
+            if 0 <= s.x <= self.w and 0 <= s.y <= self.h:
+                continue
+            c = Vector2(self.w / 2, self.h / 2)
+            d = s - c
+            if d.length_squared() < 1:
+                continue
+            k = min((self.w / 2 - margin) / max(1e-6, abs(d.x)), (self.h / 2 - margin) / max(1e-6, abs(d.y)))
+            e = c + d * k
+            dirn = d.normalize()
+            tri = [e + dirn * 10, e + dirn.rotate(140) * 8, e + dirn.rotate(-140) * 8]
+            pygame.draw.polygon(self.screen, col, tri)
+            if label:
+                dist = int(p.pos.distance_to(pos))
+                ui.text(self.screen, f"{label} {dist}", e - dirn * 22, col, 14, anchor="center")
+
+    def _toasts(self, world):
+        """Уведомления по центру сверху: последние важные сообщения, плавно гаснут."""
+        colors = {"bad": ui.BAD, "good": ui.GOOD, "event": (190, 150, 255), "info": ui.TEXT}
+        recent = [m for m in world.log if world.t - m[1] < 4.5 and m[2] != "info"][-3:]
+        y = 74
+        for text, when, level in recent:
+            age = world.t - when
+            k = min(1.0, age * 6, (4.5 - age) / 0.8)
+            col = colors[level]
+            w = ui.text_width(text, 20, True) + 36
+            r = pygame.Rect(0, 0, w, 28)
+            r.midtop = (self.w // 2, y - int((1 - min(1.0, age * 6)) * 12))
+            bg = pygame.Surface(r.size, pygame.SRCALPHA)
+            bg.fill((5, 9, 14, int(210 * k)))
+            self.screen.blit(bg, r)
+            pygame.draw.rect(self.screen, P_mix(ui.FAINT, col, k), r, 1)
+            pygame.draw.line(self.screen, P_mix(ui.FAINT, col, k), r.topleft, r.bottomleft, 3)
+            img = ui.Fonts.get(20, True).render(text, True, col)
+            img.set_alpha(int(255 * k))
+            self.screen.blit(img, img.get_rect(center=r.center))
+            y += 32
 
     # --- состояние корабля -------------------------------------------------------
 
     def _status(self, world, dt):
         s, p, cap = self.screen, world.player, world.captain
         box = ui.panel(self.screen, (12, 12, 330, 188), p.hull.name, ui.WARN if world.in_capsule else ui.ACCENT)
+        self.panels.append(box.union(pygame.Rect(12, box.bottom, 330, 34)))
         self._silhouette(world, pygame.Rect(box.x + 12, box.y + 28, 62, 120))
 
         x, y, w = box.x + 88, box.y + 32, 150
@@ -144,7 +297,8 @@ class Hud:
         y = box.bottom + 6
         ui.panel(self.screen, (12, y, 330, 28), None, ui.LINE)
         ui.icon(s, "credits", (28, y + 14), 14, ui.C_ENERGY)
-        ui.text(s, f"{cap.credits} КК", (42, y + 7), ui.TEXT, 18)
+        ui.text(s, f"{cap.credits} КК", (42, y + 7), ui.C_ENERGY if self._flash_until.get("credits", 0) > 0
+                else ui.TEXT, 18, bold=self._flash_until.get("credits", 0) > 0)
         ui.icon(s, "cargo", (150, y + 14), 14, ui.TEXT)
         full = world.cargo_used >= world.cargo_capacity
         ui.text(s, f"{int(world.cargo_used)}/{world.cargo_capacity}", (164, y + 7), ui.WARN if full else ui.TEXT, 18)
@@ -160,9 +314,25 @@ class Hud:
             chips.append((f"ДОЛГ {cap.debt} КК", ui.BAD))
         if cap.trauma:
             chips.append(("ТРАВМА", ui.WARN))
+        # предупреждения заранее
+        if p.cap_max and p.power_balance(0.8) < 0 and world.density_at(p.pos) < 0.6:
+            chips.append(("В ПЕЛЕНЕ НЕ ХВАТИТ ЭНЕРГИИ", ui.WARN))
+        if p.mass_factor() < 0.8:
+            chips.append((f"ПЕРЕГРУЗ −{int((1 - p.mass_factor()) * 100)}% скор.", ui.WARN))
+        if p.hp < p.hull.hp * 0.3 and not world.in_capsule:
+            chips.append(("КОРПУС < 30%", ui.BAD))
+        if any(w.defn.ammo and w.ammo == 0 for w in p.weapons):
+            chips.append(("НЕТ БОЕЗАПАСА", ui.WARN))
+        if world.spotlight and world.daylight() < 0.5:
+            chips.append(("ПРОЖЕКТОР ВЫДАЁТ", ui.WARN))
         x = 12
+        row_y = y
         for label, col in chips:
-            r = ui.chip(s, label, (x, y), col, 15)
+            w = ui.text_width(label, 15, True) + 10
+            if x + w > 340:
+                x = 12
+                row_y += 18
+            r = ui.chip(s, label, (x, row_y), col, 15)
             x = r.right + 6
 
     def _silhouette(self, world, rect):
@@ -238,6 +408,7 @@ class Hud:
         s = self.screen
         n = self.MINIMAP
         box = ui.panel(self.screen, (self.w - n - 24, 12, n + 12, n + 34), "Карта")
+        self.panels.append(box)
         x0, y0 = box.x + 6, box.y + 26
         s.blit(self.minimap_bg, (x0, y0))
         if world.veil.in_dead_zone(world.player.pos):
@@ -274,6 +445,7 @@ class Hud:
         rows = len(p.weapons) + len(actives)
         h = 30 + 30 + (22 if has_guns else 0) + rows * 22 + 8
         box = ui.panel(self.screen, (self.w - 344, self.h - 12 - h, 332, h), "Вооружение")
+        self.panels.append(box)
         y = box.y + 28
 
         # энергия по системам
@@ -282,14 +454,19 @@ class Hud:
             col = PIP_COLOR[sys_]
             ui.chip(s, key, (x, y + 2), ui.DIM, 14)
             ui.icon(s, PIP_ICON[sys_], (x + 26, y + 9), 12, col)
+            zone = self._button((x - 2, y, 102, 18), ("pip", sys_))
             for i in range(PIP_MAX):
                 on = i < p.pips[sys_]
                 pygame.draw.rect(s, col if on else ui.FAINT, (x + 36 + i * 11, y + 3, 8, 12))
+            if zone:
+                pygame.draw.rect(s, col, (x - 2, y, 102, 18), 1)
             x += 106
         y += 26
         pygame.draw.line(s, ui.LINE, (box.x + 10, y), (box.right - 10, y))
         y += 6
         if has_guns:
+            if self._button((box.x + 8, y - 2, box.w - 16, 22), ("ammo",)):
+                pygame.draw.rect(s, ui.LINE, (box.x + 8, y - 2, box.w - 16, 22), 1)
             ammo = world.ammo_type
             ui.chip(s, "T", (box.x + 12, y + 1), ui.DIM, 14)
             col = {"std": ui.TEXT, "ap": (210, 225, 255), "he": ui.WARN}[ammo]
@@ -324,6 +501,8 @@ class Hud:
                         anchor="topright")
             y += 22
         for n, u in enumerate(actives, 1):
+            if self._button((box.x + 8, y, box.w - 16, 21), ("utility", n - 1)):
+                pygame.draw.rect(s, ui.LINE, (box.x + 8, y, box.w - 16, 21), 1)
             if u.active_time > 0:
                 state, col = f"{u.active_time:.0f} с", ui.ACCENT
             elif u.cooldown > 0:
@@ -389,14 +568,19 @@ class Hud:
             y += 24
 
     def _log(self, world):
+        """Журнал слева снизу. В плотной Пелене записи «размываются» — амнезия из лора."""
         y = self.h - 26
-        for msg, when in reversed(world.log):
+        blur = max(0.0, (world.density_at(world.player.pos) - 0.6) / 0.4)
+        colors = {"bad": ui.BAD, "good": ui.GOOD, "event": (190, 150, 255), "info": ui.TEXT}
+        for msg, when, level in reversed(world.log):
             age = world.t - when
             if age > 10:
                 continue
             k = max(0.25, 1.0 - age / 10)
+            if blur > 0:
+                msg = _smear(msg, blur * min(1.0, age / 4), int(when * 100))
             ui.text(self.screen, "›", (14, y), tuple(int(c * k) for c in ui.ACCENT), 16, True)
-            ui.text(self.screen, msg, (26, y), tuple(int(c * k) for c in ui.TEXT), 16)
+            ui.text(self.screen, msg, (26, y), tuple(int(c * k) for c in colors[level]), 16)
             y -= 18
 
     def _help(self):
