@@ -14,7 +14,7 @@ from pygame.math import Vector2
 from . import palette as P
 
 # Окружающий свет по высоте солнца
-AMBIENT_NIGHT = (56, 66, 104)      # лунный свет
+AMBIENT_NIGHT = (74, 86, 130)      # лунный свет
 AMBIENT_DUSK = (236, 170, 146)
 AMBIENT_DAY = (255, 255, 255)
 

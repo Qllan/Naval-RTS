@@ -167,6 +167,18 @@ class FX:
                     self.add(pos + self._rv(radius * 0.8), Vector2(), 0.3, 3, (160, 220, 255), "glow")
             elif kind == "lightning":
                 self.flash = 1.0
+            elif kind == "rock":
+                pos = ev[1]
+                for _ in range(6):
+                    self.add(pos, self._rv(120), self.rng.uniform(0.2, 0.4), 1.2, P.SPARK, "spark", drag=4)
+                self.add(pos, self._rv(15), 1.0, 2.5, (120, 116, 108), "smoke", grow=8, drag=1.5)
+            elif kind == "aground":
+                pos, impact = ev[1], ev[2]
+                for _ in range(int(4 + impact / 20)):
+                    self.add(pos, self._rv(60), self.rng.uniform(0.6, 1.2), 2, P.FOAM, "foam", grow=6, drag=2,
+                             layer="water")
+                if player.pos.distance_to(pos) < 60:
+                    cam.add_shake(min(8.0, impact / 20))
             elif kind == "wreck" and self.art is not None:
                 _, ship, pal = ev
                 self._wreck(ship, pal)

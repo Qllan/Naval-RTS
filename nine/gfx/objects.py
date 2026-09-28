@@ -5,7 +5,6 @@ import math
 import pygame
 from pygame.math import Vector2
 
-from .. import config as C
 from ..ai import Tihodont
 from ..entities import RESOURCES
 from . import palette as P
@@ -13,51 +12,6 @@ from . import palette as P
 
 def _pts(cam, pos, angle, shape, scale=1.0):
     return [cam.w2s(pos + Vector2(x, y).rotate(angle) * scale) for x, y in shape]
-
-
-def draw_port(screen, cam, world, font):
-    pos = world.port
-    if not cam.visible(pos, C.PORT_RADIUS + 80):
-        return
-    t = world.t
-    s = cam.w2s(pos)
-    r = cam.px(C.PORT_RADIUS)
-    # акватория с буйками
-    pygame.draw.circle(screen, (12, 28, 40), s, int(r))
-    for i in range(16):
-        a = math.radians(i * 22.5 + t * 2)
-        b = s + Vector2(math.cos(a), math.sin(a)) * r
-        on = (int(t * 1.5) + i) % 4 == 0
-        pygame.draw.circle(screen, (240, 200, 90) if on else (110, 90, 50), b, max(2, int(cam.px(2.5))))
-    # платформа: причалы, склады, краны
-    plat = [(-70, -40), (70, -40), (78, -20), (78, 40), (-78, 40), (-78, -20)]
-    pygame.draw.polygon(screen, (46, 56, 64), _pts(cam, pos, 0, plat))
-    pygame.draw.polygon(screen, (80, 94, 102), _pts(cam, pos, 0, plat), max(1, int(cam.px(1.5))))
-    for x in (-60, -20, 20, 60):                        # пирсы
-        pier = [(x - 5, -40), (x + 5, -40), (x + 5, -95), (x - 5, -95)]
-        pygame.draw.polygon(screen, (70, 62, 52), _pts(cam, pos, 0, pier))
-        for k in range(6):
-            a, b = cam.w2s(pos + Vector2(x - 5, -45 - k * 9)), cam.w2s(pos + Vector2(x + 5, -45 - k * 9))
-            pygame.draw.line(screen, (52, 46, 40), a, b, 1)
-    for bx, by, lx, ly, col in ((-50, 10, 34, 36, (94, 104, 110)), (0, 12, 28, 30, (120, 96, 72)),
-                                (45, 8, 36, 40, (84, 98, 108))):
-        rr = pygame.Rect(0, 0, cam.px(lx), cam.px(ly))
-        rr.center = cam.w2s(pos + Vector2(bx, by))
-        pygame.draw.rect(screen, col, rr, border_radius=max(1, int(cam.px(2))))
-        pygame.draw.rect(screen, P.shade(col, 1.25), rr.inflate(-cam.px(8), -cam.px(8)),
-                         border_radius=max(1, int(cam.px(2))))
-    for cx, ang in ((-40, -30 + 20 * math.sin(t * 0.3)), (40, 200 + 15 * math.sin(t * 0.4 + 1))):
-        base = cam.w2s(pos + Vector2(cx, -30))
-        arm = base + Vector2(1, 0).rotate(ang) * cam.px(38)
-        pygame.draw.line(screen, (210, 170, 70), base, arm, max(2, int(cam.px(3))))
-        pygame.draw.circle(screen, (60, 60, 60), base, max(2, int(cam.px(5))))
-    # огни окон
-    for i in range(10):
-        on = (i * 7 + int(t)) % 5 != 0
-        wp = cam.w2s(pos + Vector2(-62 + i * 13, 34))
-        pygame.draw.circle(screen, (250, 220, 150) if on else (70, 60, 40), wp, max(1, int(cam.px(1.4))))
-    lbl = font.render("ПОРТ БЕЖЕНЦЕВ", True, (130, 190, 200))
-    screen.blit(lbl, lbl.get_rect(midtop=cam.w2s(pos + Vector2(0, 48))))
 
 
 def draw_node(screen, cam, node, t, fx):
@@ -153,15 +107,3 @@ def draw_smoke_screen(screen, cam, sm, fx, t):
         img = fx.puff((110, 114, 118), cam.px(sm.radius * 0.55), 150 * k)
         screen.blit(img, img.get_rect(center=cam.w2s(sm.pos + off)))
 
-
-def port_lights(world):
-    """Источники света порта: прожекторы, окна, буйки. (позиция, цвет, радиус в мире)."""
-    pos = world.port
-    out = [(pos + Vector2(x, -30), (255, 230, 170), 120) for x in (-40, 40)]
-    out += [(pos + Vector2(-62 + i * 26, 34), (255, 210, 140), 40) for i in range(5)]
-    t = world.t
-    for i in range(16):
-        if (int(t * 1.5) + i) % 4 == 0:
-            a = math.radians(i * 22.5 + t * 2)
-            out.append((pos + Vector2(math.cos(a), math.sin(a)) * C.PORT_RADIUS, (255, 200, 90), 45))
-    return out

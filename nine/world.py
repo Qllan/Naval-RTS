@@ -13,6 +13,7 @@ from .combat import lead_point, try_fire, update_lock, update_projectile
 from .entities import RESOURCES, Loot, ResourceNode, Smoke
 from .events import EventDirector
 from .hulls import HULLS
+from .islands import AGROUND_MIN_SPEED, avoid_turn, collide_ship, generate_islands, island_at
 from .modules import AMMO, AMMO_ORDER, MODULES
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship, fit_problems
 from .veil import Veil
@@ -86,6 +87,8 @@ class World:
         self.fx: deque = deque(maxlen=600)
         self.pirate_spawn_cd = 10.0
 
+        self.islands = generate_islands(random.Random(seed + 77), self.port, self.eye)
+        self._aground_cd = 0.0
         for _ in range(280):
             self._spawn_node()
         for i in range(4):
@@ -121,6 +124,8 @@ class World:
             pos = self._random_pos()
             if pos.distance_to(self.port) < C.PORT_RADIUS + 120 or pos.distance_to(self.eye) < C.EYE_WALL_R:
                 continue
+            if island_at(self.islands, pos, 60):
+                continue
             d = self.veil.static_density(pos.x, pos.y)
             kind = "salt" if d < C.ZONE_MIST else "condensate" if d < C.ZONE_DENSE else "filament"
             self.nodes.append(ResourceNode(pos, kind, self.rng.uniform(25, 60)))
@@ -132,7 +137,7 @@ class World:
             tries += 1
             pos = self._random_pos()
             d = self.veil.static_density(pos.x, pos.y)
-            if 0.25 < d < 0.7 and pos.distance_to(self.port) > 900:
+            if 0.25 < d < 0.7 and pos.distance_to(self.port) > 900 and not island_at(self.islands, pos, 200):
                 self.tihodonts.append(Tihodont(pos, self.rng))
 
     # --- производные показатели игрока ---------------------------------
@@ -242,6 +247,13 @@ class World:
         p.cargo_mass = self.cargo_used
         p.reload_penalty = C.TRAUMA_RELOAD_MULT if self.captain.trauma else 1.0
         p.update(dt, ctl.throttle, ctl.turn, ctl.boost, density)
+        self._aground_cd = max(0.0, self._aground_cd - dt)
+        impact = collide_ship(p, self.islands, self.rng)
+        if impact > AGROUND_MIN_SPEED:
+            self.emit("aground", Vector2(p.pos), impact)
+            if self._aground_cd <= 0:
+                self.say("Удар о скалы! Пробоина ниже ватерлинии." if p.leaks else "Удар о скалы!")
+                self._aground_cd = 2.0
         self._eye_effects(dt)
         p.drain_shield(self.events.modifier("shield_drain", p.pos, self.t) * dt)
 
@@ -412,7 +424,7 @@ class World:
         self.pirates = [pr for pr in self.pirates if pr.ship.pos.distance_to(p.pos) < 2600]
         if len(self.pirates) < wanted and self.pirate_spawn_cd <= 0:
             pos = p.pos + Vector2(1, 0).rotate(self.rng.uniform(0, 360)) * self.rng.uniform(1100, 1500)
-            if pos.distance_to(self.port) > 1400:
+            if pos.distance_to(self.port) > 1400 and not island_at(self.islands, pos, 80):
                 pos.x = min(max(pos.x, 50), C.WORLD_W - 50)
                 pos.y = min(max(pos.y, 50), C.WORLD_H - 50)
                 self.pirates.append(Pirate(pos, self.rng, self._pick_loadout(self.density_at(pos))))
@@ -432,8 +444,15 @@ class World:
                 s.set_pips(1, 4, 1)
             else:
                 s.set_pips(2, 2, 2)
+            if island_at(self.islands, pr.waypoint, 80):
+                pr.waypoint = pr._new_waypoint()
             throttle, turn, sees = pr.think(p.pos, sig, d, dt)
+            dodge = avoid_turn(s, self.islands)
+            if dodge:
+                turn, throttle = dodge, max(throttle, 0.6)
             s.update(dt, throttle, turn, False, d)
+            if collide_ship(s, self.islands, self.rng) > AGROUND_MIN_SPEED:
+                self.emit("aground", Vector2(s.pos), 60)
             dist = s.pos.distance_to(p.pos)
             engaged = pr.state == "attack" and sees
             smoke = self.in_smoke(p.pos)
@@ -474,6 +493,12 @@ class World:
         keep = []
         for pr in self.projectiles:
             update_projectile(pr, dt, self.density_at(pr.pos), self.rng)
+            if island_at(self.islands, pr.pos):                 # снаряд разбился о скалы
+                if pr.kind == "missile":
+                    self.emit("explosion", Vector2(pr.pos), 1)
+                else:
+                    self.emit("rock", Vector2(pr.pos))
+                continue
             targets = [x.ship for x in self.pirates] if pr.side == "player" else [p]
             hit = None
             for ship in targets:

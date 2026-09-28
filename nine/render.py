@@ -14,6 +14,8 @@ from .gfx import objects as O
 from .gfx import palette as P
 from .gfx.camera import Camera
 from .gfx.fx import FX
+from .gfx.islands_art import IslandArt
+from .gfx.port_art import PortArt, port_lights
 from .gfx.lighting import Lighting, ambient_color, sun_shadow
 from .gfx.ocean import FogOfWar, Ocean
 from .gfx.ship_art import ShipArt, nav_lights, window_lights
@@ -30,6 +32,8 @@ class Renderer:
         self.fx = FX()
         self.fx.art = self.art
         self.wakes = Wakes()
+        self.islands = IslandArt()
+        self.port = PortArt()
         self.ocean = Ocean()
         self.fog = FogOfWar(self.w, self.h)
         self.font = pygame.font.Font(None, 20)
@@ -82,9 +86,12 @@ class Renderer:
         self.wakes.update(wake_ships, t, dt)
 
         self.ocean.draw_water(screen, cam, t)
+        self.islands.prefetch(world.islands, cam.center)
+        for isl in world.islands:
+            self.islands.draw(screen, cam, isl, t, daylight)
         self.wakes.draw(screen, cam, t, daylight)
         self.ocean.draw_eye_under(screen, cam, world, self.fx)
-        O.draw_port(screen, cam, world, self.font)
+        self.port.draw(screen, cam, world, self.font)
         self.fx.draw(screen, cam, "water")
 
         for n in world.nodes:
@@ -188,7 +195,7 @@ class Renderer:
                 L.light(cam.w2s(pr.pos), cam.px(26 if pr.kind == "shell" else 44), col, 0.6)
         # порт, ресурсы, фауна, Око
         if cam.visible(world.port, 400):
-            for lp, col, r in O.port_lights(world):
+            for lp, col, r in port_lights(world):
                 L.light(cam.w2s(lp), cam.px(r), col, 1.0)
         for n in world.nodes:
             if n.kind != "salt" and cam.visible(n.pos, 80):
@@ -198,6 +205,11 @@ class Renderer:
             if cam.visible(tx.pos, 200) and p.pos.distance_to(tx.pos) < world.visual_range() + 150:
                 col = (240, 90, 60) if tx.angry else (60, 220, 190)
                 L.light(cam.w2s(tx.pos), cam.px(170), col, 0.55)
+        for isl in world.islands:
+            if isl.ruins and cam.visible(isl.pos, isl.r_max + 200):
+                on = int(t * 1.2 + isl.seed % 7) % 3 == 0
+                for b in self.islands.beacons(isl):
+                    L.light(cam.w2s(b), cam.px(90 if on else 30), (255, 70, 50), 0.9 if on else 0.3)
         if cam.visible(world.eye, 900):
             L.light(cam.w2s(world.eye), cam.px(700), (200, 200, 255), 1.0)
         for ev in world.events.active:

@@ -62,6 +62,15 @@ class Hud:
         for i in range(0, n, n // 8):
             pygame.draw.line(surf, (22, 34, 44), (i, 0), (i, n))
             pygame.draw.line(surf, (22, 34, 44), (0, i), (n, i))
+        for isl in world.islands:
+            pts = []
+            for k in range(24):
+                a = k / 24 * math.tau
+                r = isl.r_at(a)
+                pts.append(((isl.pos.x + math.cos(a) * r) / C.WORLD_W * n, (isl.pos.y + math.sin(a) * r) / C.WORLD_H * n))
+            pygame.draw.polygon(surf, (78, 84, 80), pts)
+            if isl.ruins:
+                pygame.draw.circle(surf, (170, 70, 60), (isl.pos.x / C.WORLD_W * n, isl.pos.y / C.WORLD_H * n), 1)
         return surf
 
     def _ghosted(self, key, frac, dt):
