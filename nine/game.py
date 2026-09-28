@@ -126,7 +126,7 @@ class Game:
             elif self.stack:
                 self.stack[-1].handle(e)
             elif self.docked:
-                if e.type == pygame.KEYDOWN and self.port_ui.handle_key(e.key, self.world) == "leave":
+                if self.port_ui.handle_event(e, self.world) == "leave":
                     self.docked = False
                     self.world.undock()
             else:
@@ -201,7 +201,7 @@ class Game:
         self.audio.update(self.world, [] if paused else self.renderer.last_events, self.renderer.lightning, dt,
                           paused=self.docked or paused)
         if self.docked:
-            self.port_ui.draw(self.world)
+            self.port_ui.draw(self.world, dt)
         elif not any(isinstance(s, MainMenu) for s in self.stack):
             self.hud.draw(self.world, self.docked, self.renderer.cam, self.renderer.last_events)
         for s in self.stack:

@@ -855,6 +855,22 @@ class World:
     def cycle_group(self, slot_index):
         return self.player.cycle_group(slot_index)
 
+    def service_all_cost(self):
+        """Ремонт + боезапас + чистка налёта одной кнопкой."""
+        clean = C.CLEAN_COST if self.player.fouling > 0.05 else 0
+        return self.repair_cost() + self.rearm_cost() + clean
+
+    def service_all(self):
+        """Делает всё, на что хватает денег (сначала ремонт). Возвращает список сделанного."""
+        done = []
+        if self.repair_cost() and self.repair():
+            done.append("ремонт")
+        if self.rearm_cost() and self.rearm():
+            done.append("боезапас")
+        if self.player.fouling > 0.05 and self.clean_hull():
+            done.append("чистка")
+        return done
+
     def clean_hull(self):
         if self.player.fouling <= 0.01 or self.captain.credits < C.CLEAN_COST:
             return False

@@ -161,3 +161,40 @@ def test_amnesia_fades_memory_in_dense_veil():
     cy, cx = int(w.player.pos.y // 200), int(w.player.pos.x // 200)
     assert w.memory[cy, cx] == 1.0                   # вокруг корабля — снова видно
     assert "amnesia" in w.codex
+
+
+def test_port_mouse_drag_installs_module_and_service_all():
+    pygame.display.init()
+    pygame.font.init()
+    screen = pygame.display.set_mode((1280, 720))
+    g = Game(seed=4, screen=screen)
+    w, ui = g.world, g.port_ui
+    w.captain.credits = 5000
+    w.player.hp -= 30
+    g.docked = True
+    w.dock()
+    ui.reset()
+    g.step(1 / 60)
+
+    def post(t, **kw):
+        pygame.event.post(pygame.event.Event(t, **kw))
+        g.handle_events()
+        g.step(1 / 60)
+
+    post(pygame.KEYDOWN, key=pygame.K_r, mod=0, unicode="")          # всё починить
+    assert w.player.hp == w.player.hull.hp
+    tab = next(r for r, k, i in ui.zones if k == "tab" and i == 2)
+    post(pygame.MOUSEBUTTONDOWN, button=1, pos=tab.center)
+    slot = next(r for r, k, i in ui.zones if k == "slot" and i == 0)
+    post(pygame.MOUSEBUTTONDOWN, button=1, pos=slot.center)
+    assert ui.picker
+    src = next(r for r, k, i in ui.zones if k == "pick" and i == 1)
+    key = ui.picker_items(w)[1][1]
+    post(pygame.MOUSEBUTTONDOWN, button=1, pos=src.center)
+    post(pygame.MOUSEMOTION, pos=slot.center, rel=(0, 0), buttons=(1, 0, 0))
+    post(pygame.MOUSEBUTTONUP, button=1, pos=slot.center)
+    assert w.player.fit[0] == key
+    leave = next(r for r, k, i in ui.zones if k == "button" and i == "leave")
+    post(pygame.MOUSEBUTTONDOWN, button=1, pos=leave.center)
+    assert not g.docked
+    pygame.quit()

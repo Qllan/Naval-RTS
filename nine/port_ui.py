@@ -5,6 +5,7 @@ Backspace — снять модуль, G — группа огня, Esc — на
 """
 
 import pygame
+from pygame.math import Vector2
 
 from . import config as C
 from .gfx import ui
@@ -62,6 +63,11 @@ class PortUI:
         self.pick_sel = 0
         self.slot = 0
         self.message = ("", UI)
+        self.age = 0.0
+        self.zones = []          # [(rect, вид, индекс)] — кликабельные зоны, пересобираются каждый кадр
+        self.hover = None
+        self.drag = None         # перетаскиваемый модуль: {"src", "key", "start", "active"}
+        self.mouse = (0, 0)
 
     # --- данные вкладок -------------------------------------------------
 
@@ -136,6 +142,128 @@ class PortUI:
             else:
                 self.say(f"Группа огня: {GROUP_NAME[g]}", ACCENT)
         return None
+
+    # --- мышь ------------------------------------------------------------------
+
+    def handle_event(self, e, world):
+        """Любое событие pygame. Возвращает 'leave', если игрок выходит в море."""
+        if e.type == pygame.KEYDOWN:
+            if e.key == pygame.K_r:
+                self._service_all(world)
+                return None
+            if e.key == pygame.K_p and not self.picker:
+                self._sell_all(world)
+                return None
+            return self.handle_key(e.key, world)
+        if e.type == pygame.MOUSEMOTION:
+            self.mouse = e.pos
+            if self.drag and not self.drag["active"]:
+                if (Vector2(e.pos) - self.drag["start"]).length() > 6:
+                    self.drag["active"] = True
+            z = self._zone_at(e.pos)
+            if z != self.hover:
+                self.hover = z
+                if z and z[0] in ("row", "slot", "pick", "tab", "button"):
+                    self.sound("ui_hover")
+                if z and z[0] in ("row", "slot") and not self.picker:
+                    self.sel = z[1]
+                elif z and z[0] == "pick":
+                    self.pick_sel = z[1]
+        elif e.type == pygame.MOUSEWHEEL:
+            n = self._count(world)
+            self._move(-e.y, n)
+        elif e.type == pygame.MOUSEBUTTONDOWN:
+            z = self._zone_at(e.pos)
+            if z is None:
+                if e.button == 1 and self.picker:
+                    self.picker = False
+                return None
+            kind, idx = z
+            if e.button == 3:
+                if kind == "slot":
+                    err = world.uninstall(idx)
+                    self.say(err or "Модуль снят и отправлен на склад.", ui.BAD if err else ACCENT)
+                elif self.picker:
+                    self.picker = False
+                return None
+            if e.button != 1:
+                return None
+            if kind == "tab":
+                self.tab, self.sel, self.picker = idx, 0, False
+                self.sound("ui_click")
+            elif kind == "button":
+                return self._button(idx, world)
+            elif kind == "row":
+                self.sel = idx
+                self._activate(world)
+            elif kind == "slot":
+                if self.picker and idx != self.slot:
+                    self.slot, self.pick_sel = idx, 0
+                    self.sound("ui_click")
+                else:
+                    self.sel = idx
+                    self._activate(world)
+            elif kind == "pick":
+                self.pick_sel = idx
+                src, key = self.picker_items(world)[idx]
+                self.drag = {"src": src, "key": key, "start": Vector2(e.pos), "active": False}
+            elif kind == "group":
+                g = world.cycle_group(idx)
+                if g is not None:
+                    self.say(f"Группа огня: {GROUP_NAME[g]}", ACCENT)
+        elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and self.drag:
+            drag, self.drag = self.drag, None
+            z = self._zone_at(e.pos)
+            if not drag["active"]:
+                if z == ("pick", self.pick_sel):
+                    self._activate(world)           # простой клик — установить в выбранный слот
+                return None
+            if z and z[0] == "slot":
+                err = world.install(z[1], drag["key"], from_storage=(drag["src"] == "storage"))
+                self.say(err or f"Установлено: {MODULES[drag['key']].name}", ui.BAD if err else ACCENT)
+                if not err:
+                    self.picker = False
+                    self.sel = z[1]
+        return None
+
+    def _zone_at(self, pos):
+        for rect, kind, idx in reversed(self.zones):
+            if rect.collidepoint(pos):
+                return kind, idx
+        return None
+
+    def _button(self, name, world):
+        if name == "leave":
+            problems = world.undock_problems()
+            if problems:
+                self.say("Нельзя выйти: " + problems[0], ui.BAD)
+                return None
+            return "leave"
+        if name == "service":
+            self._service_all(world)
+        elif name == "sell":
+            self._sell_all(world)
+        return None
+
+    def _service_all(self, world):
+        cost = world.service_all_cost()
+        if cost == 0:
+            self.say("Корабль в порядке — чинить и пополнять нечего.", DIM)
+            return
+        done = world.service_all()
+        if done:
+            left = world.service_all_cost()
+            tail = f" Не хватило на остальное ({left} КК)." if left else ""
+            self.say("Готово: " + ", ".join(done) + "." + tail, ACCENT if not left else WARN)
+        else:
+            self.say(f"Не хватает кредитов: нужно {cost} КК.", ui.BAD)
+
+    def _sell_all(self, world):
+        value = world.cargo_value()
+        if world.sell_cargo_action():
+            self.say(f"Груз продан: +{value} КК", ACCENT)
+        else:
+            self.say("Трюм пуст.", DIM)
 
     def _count(self, world):
         tab = TABS[self.tab]
@@ -221,11 +349,14 @@ class PortUI:
             y += font.get_linesize()
         return y
 
-    def draw(self, world):
+    def draw(self, world, dt=1 / 60):
+        self.age += dt
+        self.zones = []
+        k = 1 - (1 - min(1.0, self.age / 0.22)) ** 3            # анимация открытия
         w, h = 1080, 640
-        rect = pygame.Rect((self.w - w) // 2, (self.h - h) // 2, w, h)
+        rect = pygame.Rect((self.w - w) // 2, (self.h - h) // 2 + int((1 - k) * 30), w, h)
         dim = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
-        dim.fill((0, 0, 0, 110))
+        dim.fill((0, 0, 0, int(110 * k)))
         self.screen.blit(dim, (0, 0))
         ui.panel(self.screen, rect, None, ACCENT, bg=(5, 9, 14, 236))
 
@@ -243,6 +374,9 @@ class PortUI:
             col = ACCENT if active else DIM
             tw = ui.text_width(name.upper(), 17, True) + 40
             tr = pygame.Rect(x, ty, tw, 28)
+            self.zones.append((tr, "tab", i))
+            if not active and tr.collidepoint(self.mouse):
+                pygame.draw.rect(self.screen, ui.FAINT, tr, 1)
             if active:
                 pygame.draw.rect(self.screen, ui.SEL_BG, tr)
                 pygame.draw.line(self.screen, ACCENT, tr.bottomleft, tr.bottomright, 2)
@@ -250,6 +384,7 @@ class PortUI:
             ui.text(self.screen, name.upper(), (tr.x + 26, tr.centery), col, 17, True, anchor="midleft")
             x = tr.right + 6
         pygame.draw.line(self.screen, ui.LINE, (rect.x + 16, ty + 29), (rect.right - 16, ty + 29))
+        self._quick_bar(world, rect)
 
         body = pygame.Rect(rect.x + 24, rect.y + 116, rect.w - 48, rect.h - 170)
         tab = TABS[self.tab]
@@ -268,19 +403,99 @@ class PortUI:
             ui.text(self.screen, msg, (rect.x + 30, rect.bottom - 50), col, 18)
         pygame.draw.line(self.screen, ui.LINE, (rect.x + 16, rect.bottom - 28), (rect.right - 16, rect.bottom - 28))
         x = rect.x + 22
-        for key, label in (("A/D", "вкладки"), ("W/S", "выбор"), ("Enter", "действие"), ("Backspace", "снять"),
-                           ("G", "группа огня"), ("Esc", "в море")):
+        for key, label in (("A/D", "вкладки"), ("W/S", "выбор"), ("Enter", "действие"), ("Backspace/ПКМ", "снять"),
+                           ("G", "группа огня"), ("R", "всё починить"), ("P", "продать груз")):
             r = ui.chip(self.screen, key, (x, rect.bottom - 22), DIM, 14)
             r = ui.text(self.screen, label, (r.right + 6, rect.bottom - 22), DIM, 15)
-            x = r.right + 18
+            x = r.right + 16
+        br = pygame.Rect(rect.right - 150, rect.bottom - 25, 134, 20)
+        self._btn(br, "В МОРЕ  ·  Esc", "leave", ACCENT)
+        if self.drag and self.drag["active"]:
+            m = MODULES[self.drag["key"]]
+            mx, my = self.mouse
+            ui.icon(self.screen, ui.module_icon_kind(m), (mx + 14, my + 10), 16, ACCENT)
+            ui.text(self.screen, m.name, (mx + 26, my + 2), ACCENT, 16, True)
+        elif self.hover and self.hover[0] == "pick" and self.picker:
+            self._tooltip(world, self.hover[1])
 
-    def _list(self, rows, x, y, width, sel, row_h=24):
-        """Строки (подпись, цвет[, иконка]). Иконка — вид из gfx.ui.icon."""
+    def _btn(self, rect, label, name, color=UI, enabled=True):
+        rect = pygame.Rect(rect)
+        self.zones.append((rect, "button", name))
+        hot = rect.collidepoint(self.mouse)
+        if hot:
+            pygame.draw.rect(self.screen, ui.SEL_BG, rect)
+        pygame.draw.rect(self.screen, color if enabled else ui.FAINT, rect, 1)
+        ui.text(self.screen, label, rect.center, (color if hot else UI) if enabled else DIM, 15, True, anchor="center")
+
+    def _quick_bar(self, world, rect):
+        """Быстрые действия при входе в порт: «всё починить и пополнить», «продать груз»."""
+        y = rect.y + 18
+        cost = world.service_all_cost()
+        value = world.cargo_value()
+        x = rect.x + 300
+        if cost:
+            enough = world.captain.credits >= cost
+            label = f"R  Починить и пополнить всё — {cost} КК"
+            w = ui.text_width(label, 15, True) + 24
+            self._btn((x, y, w, 24), label, "service", ACCENT if enough else WARN)
+            x += w + 8
+        if value:
+            label = f"P  Продать груз +{value} КК"
+            w = ui.text_width(label, 15, True) + 24
+            self._btn((x, y, w, 24), label, "sell", ui.C_ENERGY)
+
+    def _tooltip(self, world, idx):
+        """Подсказка у курсора: чем модуль из списка отличается от стоящего в слоте."""
+        items = self.picker_items(world)
+        if idx >= len(items):
+            return
+        src, key = items[idx]
+        m = MODULES[key]
+        p = world.player
+        fit = list(p.fit)
+        fit[self.slot] = key
+        cur = ship_summary(p, world.cargo_used)
+        new = ship_summary(Ship(p.hull.key, (0, 0), fit=fit), world.cargo_used)
+        lines = []
+        for (label, a, higher), (_, b, _) in zip(cur, new):
+            if abs(b - a) > 0.05:
+                if abs(a) > 1e-6:
+                    v = (b - a) / abs(a) * 100
+                    if abs(v) < 0.5:
+                        continue
+                    pct = f"{v:+.1f}%" if abs(v) < 10 else f"{v:+.0f}%"
+                else:
+                    pct = f"{b - a:+.0f}"
+                good = (b > a) == higher
+                lines.append((f"{pct}  {label.lower()}", ui.GOOD if good else ui.BAD))
+        if not lines:
+            lines.append(("без изменений", DIM))
+        old = p.fit[self.slot]
+        head = f"вместо: {MODULES[old].name}" if old else "в пустой слот"
+        w = max(ui.text_width(m.name, 17, True), *(ui.text_width(t, 16) for t, _ in lines), ui.text_width(head, 15)) + 24
+        h = 50 + len(lines) * 18
+        mx, my = self.mouse
+        r = pygame.Rect(mx + 18, my + 12, w, h)
+        r.right = min(r.right, self.w - 4)
+        r.bottom = min(r.bottom, self.h - 4)
+        ui.panel(self.screen, r, None, ACCENT, bg=(8, 14, 20, 245))
+        ui.text(self.screen, m.name, (r.x + 12, r.y + 8), UI, 17, True)
+        ui.text(self.screen, head, (r.x + 12, r.y + 27), DIM, 15)
+        for i, (t, col) in enumerate(lines):
+            ui.text(self.screen, t, (r.x + 12, r.y + 46 + i * 18), col, 16)
+
+    def _list(self, rows, x, y, width, sel, row_h=24, zone="row", first=0):
+        """Строки (подпись, цвет[, иконка]). Иконка — вид из gfx.ui.icon. Строки кликабельны."""
         for i, row in enumerate(rows):
             label, col = row[0], row[1]
             kind = row[2] if len(row) > 2 else None
+            rr = pygame.Rect(x - 8, y + i * row_h - 4, width, row_h)
+            if zone:
+                self.zones.append((rr, zone, first + i))
             if i == sel:
-                ui.selection(self.screen, (x - 8, y + i * row_h - 4, width, row_h))
+                ui.selection(self.screen, rr)
+            elif zone and rr.collidepoint(self.mouse) and not self.drag:
+                pygame.draw.rect(self.screen, ui.FAINT, rr, 1)
             tx = x
             if kind:
                 ui.icon(self.screen, kind, (x + 7, y + i * row_h + 7), 13, col)
@@ -380,7 +595,13 @@ class PortUI:
                 label += f"  [{GROUP_NAME[w.group]}]"
             rows.append((label, UI if key else DIM, ui.MODULE_ICON[slot.category] if not key
                          else ui.module_icon_kind(MODULES[key])))
-        self._list(rows, body.x, body.y, 400, -1 if self.picker else self.sel, 22)
+        self._list(rows, body.x, body.y, 400, -1 if self.picker else self.sel, 22, zone="slot")
+        if self.drag and self.drag["active"]:            # подсветка слотов при перетаскивании
+            m = MODULES[self.drag["key"]]
+            for i, slot in enumerate(p.hull.slots):
+                ok = m.category == slot.category and m.size <= slot.size
+                if ok:
+                    pygame.draw.rect(self.screen, ui.GOOD, (body.x - 8, body.y + i * 22 - 4, 400, 22), 1)
         if self.picker:
             pygame.draw.rect(self.screen, (60, 90, 100), (body.x - 6, body.y + self.slot * 22 - 3, 400, 22), 1)
         else:
@@ -401,11 +622,12 @@ class PortUI:
                 cur = " (стоит)" if p.fit[self.slot] == key and src == "shop" else ""
                 prow.append((f"{m.name} [{SIZE_NAME[m.size]}] — {tag}{cur}", ACCENT if src == "storage" else UI,
                              ui.module_icon_kind(m)))
-            self.text(f"Выбор модуля ({CATEGORY_NAME[p.hull.slots[self.slot].category]})", (x, body.y - 2), DIM,
-                      self.small)
+            self.text(f"Выбор модуля ({CATEGORY_NAME[p.hull.slots[self.slot].category]}) · клик или перетащите в слот",
+                      (x, body.y - 2), DIM, self.small)
             visible = 12
             first = max(0, min(self.pick_sel - visible + 1, len(prow) - visible))      # прокрутка
-            self._list(prow[first:first + visible], x, body.y + 18, 330, self.pick_sel - first, 22)
+            self._list(prow[first:first + visible], x, body.y + 18, 330, self.pick_sel - first, 22, zone="pick",
+                       first=first)
             if first > 0:
                 ui.text(self.screen, "▲", (x + 322, body.y + 4), DIM, 14)
             if first + visible < len(prow):
