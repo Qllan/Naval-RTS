@@ -603,7 +603,7 @@ class PortUI:
 
     def _engineering_panel(self, world, body, preview=None):
         """Инженерный баланс, без закрытия списка модулей и сравнения fitting."""
-        panel = pygame.Rect(body.right - 289, body.y, 284, body.h - 6)
+        panel = pygame.Rect(body.right - 279, body.y, 274, body.h - 6)
         pygame.draw.rect(self.screen, (11, 24, 32), panel)
         pygame.draw.rect(self.screen, ui.LINE, panel, 1)
         x, y = panel.x + 11, panel.y + 10
@@ -918,7 +918,7 @@ class PortUI:
                 cur = " (стоит)" if p.fit[self.slot] == key and src == "shop" else ""
                 prow.append((f"{m.name} [{SIZE_NAME[m.size]}] — {tag}{cur}", ACCENT if src == "storage" else UI,
                              ui.module_icon_kind(m)))
-            self.text(f"Выбор модуля ({CATEGORY_NAME[p.hull.slots[self.slot].category]}) · клик или перетащите в слот",
+            self.text(f"МОДУЛИ · {CATEGORY_NAME[p.hull.slots[self.slot].category]}",
                       (x, body.y - 2), DIM, self.small)
             visible = 12
             first = max(0, min(self.pick_sel - visible + 1, len(prow) - visible))      # прокрутка
