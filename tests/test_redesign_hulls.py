@@ -279,3 +279,28 @@ def test_legacy_hulls_have_unchanged_internal_layout_defaults():
     for key in ("scout", "corvette", "torpedo_boat", "cruiser", "barge"):
         assert all(slot.diagram_pos is None for slot in HULLS[key].slots
                    if slot.category != "weapon")
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_schematic_labels_follow_longitudinal_mount_order(key):
+    from nine.port_ui import schematic_side_slots
+
+    hull = HULLS[key]
+    columns = schematic_side_slots(hull.slots)
+    assert len(columns) == 2
+    displayed = {i for col in columns for i, _ in col}
+    expected = {i for i, slot in enumerate(hull.slots) if slot.category != "weapon"}
+    assert displayed == expected
+    for column in columns:
+        x = [slot.diagram_pos[0] for _, slot in column]
+        assert x == sorted(x, reverse=True)
+
+
+def test_legacy_hull_schematic_falls_back_to_slot_order():
+    from nine.port_ui import schematic_side_slots
+
+    for key in ("scout", "corvette", "barge"):
+        columns = schematic_side_slots(HULLS[key].slots)
+        for column in columns:
+            indices = [i for i, _ in column]
+            assert indices == sorted(indices)

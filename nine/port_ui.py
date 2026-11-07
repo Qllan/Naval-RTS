@@ -26,6 +26,22 @@ DENSE = 0.8          # «плотная Пелена» для сравнения
 
 
 
+def schematic_side_slots(slots):
+    """Разбить внутренние узлы на два борта и упорядочить от носа к корме.
+
+    Сортировка по продольным координатам сохраняет читаемые, преимущественно
+    параллельные линии вместо пересечений при произвольной нумерации слотов.
+    Для старых корпусов без координат порядок остаётся по номеру слота.
+    """
+    systems = [(i, slot) for i, slot in enumerate(slots) if slot.category != "weapon"]
+    columns = (systems[::2], systems[1::2])
+    return tuple(sorted(col, key=lambda item: (
+        item[1].diagram_pos is None,
+        -(item[1].diagram_pos[0] if item[1].diagram_pos is not None else 0),
+        item[0]))
+                 for col in columns)
+
+
 def weapon_arc_points(center, facing, arc, radius):
     """Точки сектора на схеме: 0° — нос вверх, +90° — правый борт.
 
@@ -683,13 +699,11 @@ class PortUI:
 
         # Подписи внутренних систем формируют два читабельных ряда с
         # направляющими к их собственным проектным точкам внутри корпуса.
-        systems = [(i, slot) for i, slot in enumerate(ship.hull.slots)
-                   if slot.category != "weapon"]
+        side_sets = schematic_side_slots(ship.hull.slots)
         abbreviations = {
             "engine": "ДВ", "reactor": "РЕ", "shield": "ЩТ",
             "armor": "БР", "sensor": "СН", "utility": "УТ",
         }
-        side_sets = (systems[::2], systems[1::2])
         row_step = min(26, max(20, (rect.h - 53) // max(1, max(len(s) for s in side_sets))))
         for side, set_of_slots in enumerate(side_sets):
             card_x = rect.x + 9 if side == 0 else rect.right - 104
