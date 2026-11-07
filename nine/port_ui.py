@@ -14,7 +14,7 @@ from .gfx import ui
 from .gfx.ship_art import ShipArt
 from .hulls import PLAYER_HULLS
 from .modules import AMMO, CATEGORY_NAME, MODULES, SIZE_NAME, WeaponDef, module_stats
-from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship
+from .ship import CARGO_MASS, SUBSYSTEM_NAME, SUBSYSTEMS, Ship
 from .world import AMMO_PACK, MODULE_RESALE
 
 UI, DIM, ACCENT, WARN = ui.TEXT, ui.DIM, ui.ACCENT, ui.WARN
@@ -76,6 +76,36 @@ def shipyard_window(total, selected, page_size=8):
     selected = max(0, min(total - 1, selected))
     first = max(0, min(total - visible, selected - visible // 2))
     return first, first + visible
+
+
+def engineering_snapshot(ship, cargo=0.0, *, engine_pips=None):
+    """Сухой проектный расчёт сборки; не меняет корабль и его ресурсы.
+
+    Включает модули и внешний груз, но не затопление, повреждения, форсаж
+    или обрастание. Для сравнения использует одинаковое распределение энергии.
+    """
+    total_mass = ship.hull.mass + ship.module_mass + cargo * CARGO_MASS
+    design_mass = ship.hull.mass * 1.6
+    mass_factor = min(1.1, (design_mass / total_mass) ** 0.5)
+    pips = ship.pips["engines"] if engine_pips is None else engine_pips
+    speed_pips = 0.85 + 0.075 * pips
+    engine = ship.engine
+    return {
+        "hull_mass": ship.hull.mass,
+        "module_mass": ship.module_mass,
+        "cargo_mass": cargo * CARGO_MASS,
+        "total_mass": total_mass,
+        "design_mass": design_mass,
+        "power_output": ship.output,
+        "upkeep_clear": ship.upkeep(0.0),
+        "balance_clear": ship.power_balance(0.0),
+        "upkeep_veil": ship.upkeep(DENSE),
+        "balance_veil": ship.power_balance(DENSE),
+        "speed": (engine.top_speed * ship.hull.speed_mult * mass_factor * speed_pips
+                  if engine else 0.0),
+        "accel": (engine.thrust * 100 / total_mass if engine else 0.0),
+        "turn": ship.hull.turn_rate * min(1.15, mass_factor),
+    }
 
 
 def ship_summary(ship, cargo=0.0):
@@ -571,6 +601,73 @@ class PortUI:
                 label += "…"
             self.text(label, (tx, y + i * row_h), col)
 
+    def _engineering_panel(self, world, body, preview=None):
+        """Инженерный баланс, без закрытия списка модулей и сравнения fitting."""
+        panel = pygame.Rect(body.right - 289, body.y, 284, body.h - 6)
+        pygame.draw.rect(self.screen, (11, 24, 32), panel)
+        pygame.draw.rect(self.screen, ui.LINE, panel, 1)
+        x, y = panel.x + 11, panel.y + 10
+        self.text("ИНЖЕНЕРНЫЙ БАЛАНС", (x, y), ACCENT, self.small)
+        cur = engineering_snapshot(world.player, world.cargo_used)
+        nxt = (engineering_snapshot(preview, world.cargo_used,
+                                    engine_pips=world.player.pips["engines"])
+               if preview is not None else None)
+
+        if nxt is not None:
+            self.text("Сейчас / после", (panel.right - 10, y + 20), DIM, self.small, right=True)
+
+        def section(title, yy):
+            pygame.draw.line(self.screen, ui.LINE, (x, yy + 17), (panel.right - 11, yy + 17))
+            self.text(title, (x, yy), DIM, self.small)
+
+        def metric(label, key, yy, *, higher=True, signed=False):
+            value = cur[key]
+            changed = nxt is not None and abs(nxt[key] - value) > 0.05
+            color = ui.GOOD if changed and ((nxt[key] > value) == higher) else (
+                ui.BAD if changed else UI)
+            self.text(label, (x, yy), DIM, self.small)
+            if changed:
+                self.text(f"{value:.0f} > {nxt[key]:.0f}", (panel.right - 11, yy),
+                          color, self.small, right=True)
+            else:
+                text_value = f"{value:+.0f}" if signed else f"{value:.0f}"
+                self.text(text_value, (panel.right - 11, yy), color, self.small, right=True)
+
+        def meter(yy, amount, capacity, label, *, bad=False):
+            self.text(label, (x, yy - 2), DIM, self.small)
+            bar = pygame.Rect(x, yy + 16, panel.w - 24, 8)
+            pygame.draw.rect(self.screen, (39, 56, 63), bar)
+            if capacity > 0:
+                ratio = max(0.0, min(1.0, amount / capacity))
+                filled = pygame.Rect(bar.x, bar.y, round(bar.w * ratio), bar.h)
+                if filled.w:
+                    pygame.draw.rect(self.screen, ui.BAD if bad else ACCENT, filled)
+            pygame.draw.rect(self.screen, ui.LINE, bar, 1)
+
+        section("МАССА · сухое состояние", y + 43)
+        metric("Корпус", "hull_mass", y + 65)
+        metric("Модули", "module_mass", y + 85, higher=False)
+        metric("Груз (масса)", "cargo_mass", y + 105, higher=False)
+        metric("Итого", "total_mass", y + 125, higher=False)
+        meter(y + 147, nxt["total_mass"] if nxt else cur["total_mass"],
+              cur["design_mass"] * 1.35,
+              f"Проектный ориентир {cur['design_mass']:.0f}",
+              bad=(nxt["total_mass"] if nxt else cur["total_mass"]) > cur["design_mass"])
+
+        section("ЭНЕРГИЯ · ед/с", y + 190)
+        metric("Реактор", "power_output", y + 213)
+        metric("Расход", "upkeep_clear", y + 233, higher=False)
+        metric("Баланс", "balance_clear", y + 253, signed=True)
+        metric("В Пелене", "balance_veil", y + 273, signed=True)
+        if (nxt or cur)["balance_veil"] < 0:
+            self.text("! Риск энергодефицита в Пелене", (x, y + 296),
+                      WARN, self.small)
+
+        section("ХОДОВЫЕ · без повреждений", y + 320)
+        metric("Скорость", "speed", y + 344)
+        metric("Разгон", "accel", y + 365)
+        metric("Поворот", "turn", y + 386)
+
     def _stats(self, world, x, y, preview=None):
         """Сводка корабля; с `preview` — сравнение «было > станет»."""
         cargo = world.cargo_used
@@ -863,7 +960,7 @@ class PortUI:
                 self.text("Enter — выбрать модуль", (x, body.y), DIM)
         self._hull_layout(p, body, len(rows), preview.fit if preview else None,
                           focus=self.blueprint_focus)
-        self._stats(world, body.right - 250, body.y, preview)
+        self._engineering_panel(world, body, preview)
 
     def _storage(self, world, body):
         storage = world.captain.storage

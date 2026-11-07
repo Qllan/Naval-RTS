@@ -362,3 +362,66 @@ def test_blueprint_focus_expands_all_three_schematics():
         assert set(click_zones) == set(range(len(ship.hull.slots)))
         for index, zone in click_zones.items():
             assert zone.width > 0 and zone.height > 0
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_engineering_snapshot_matches_ship_simulation_without_mutation(key):
+    from nine.port_ui import engineering_snapshot
+    from nine.ship import CARGO_MASS
+
+    ship = Ship(key, (0, 0))
+    before = (ship.cargo_mass, ship.mass, ship.power_balance(0.0),
+              tuple(ship.fit), dict(ship.pips))
+    data = engineering_snapshot(ship, 12)
+    assert data["hull_mass"] == ship.hull.mass
+    assert data["module_mass"] == ship.module_mass
+    assert data["cargo_mass"] == pytest.approx(12 * CARGO_MASS)
+    assert data["total_mass"] == pytest.approx(ship.hull.mass + ship.module_mass + 12 * CARGO_MASS)
+    assert data["balance_clear"] == pytest.approx(ship.power_balance(0.0))
+    assert data["balance_veil"] == pytest.approx(ship.power_balance(0.8))
+    assert (ship.cargo_mass, ship.mass, ship.power_balance(0.0),
+            tuple(ship.fit), dict(ship.pips)) == before
+    assert engineering_snapshot(ship, 0)["speed"] == pytest.approx(ship.base_top_speed())
+
+
+def test_engineering_snapshot_shows_reactor_and_engine_tradeoffs():
+    from nine.port_ui import engineering_snapshot
+
+    ship = Ship("manta", (0, 0))
+    reactor = next(i for i, slot in enumerate(ship.hull.slots) if slot.category == "reactor")
+    engine = next(i for i, slot in enumerate(ship.hull.slots) if slot.category == "engine")
+    pips = 4
+    current = engineering_snapshot(ship, 0, engine_pips=pips)
+
+    fit = list(ship.fit)
+    fit[reactor] = "reactor_m2"
+    reactor_up = engineering_snapshot(Ship("manta", (0, 0), fit=fit), 0, engine_pips=pips)
+    assert reactor_up["power_output"] > current["power_output"]
+    assert reactor_up["balance_clear"] > current["balance_clear"]
+    assert reactor_up["total_mass"] > current["total_mass"]
+
+    fit = list(ship.fit)
+    fit[engine] = "engine_m2"
+    faster = engineering_snapshot(Ship("manta", (0, 0), fit=fit), 0, engine_pips=pips)
+    assert faster["speed"] > current["speed"]
+    assert faster["upkeep_clear"] > current["upkeep_clear"]
+
+
+def test_engineering_panel_renders_without_modifying_world():
+    import pygame
+    from nine.port_ui import PortUI
+    from nine.world import World
+
+    pygame.font.init()
+    surface = pygame.Surface((1280, 720))
+    port = PortUI(surface)
+    world = World(seed=9, first_event=1e9)
+    world.player = Ship("bastion", world.port)
+    world.captain.credits = 12000
+    before = (world.captain.credits, list(world.player.fit), world.player.cargo_mass)
+    slot = next(i for i, s in enumerate(world.player.hull.slots) if s.category == "reactor")
+    fit = list(world.player.fit)
+    fit[slot] = "reactor_m2"
+    preview = Ship("bastion", world.port, fit=fit)
+    port._engineering_panel(world, pygame.Rect(148, 156, 1032, 470), preview)
+    assert (world.captain.credits, list(world.player.fit), world.player.cargo_mass) == before
