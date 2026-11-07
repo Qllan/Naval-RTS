@@ -24,3 +24,13 @@ jobs:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
         run: python -m pytest -q
+      - name: Render new hull preview
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_hulls.py --output hull-preview.png
+      - name: Upload hull preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-hull-preview
+          path: hull-preview.png

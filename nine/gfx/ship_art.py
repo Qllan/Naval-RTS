@@ -128,6 +128,52 @@ class _Canvas:
 
 # --- корпус -----------------------------------------------------------------
 
+def _industrial_details(cv, visual, pal):
+    """Крупные узнаваемые функциональные элементы без случайного декора.
+
+    Отрисовка происходит до башен и надстроек: оружие и мостики физически
+    перекрывают детали палубы, а не оказываются спрятаны за украшениями.
+    """
+    for detail in visual.details:
+        x, y = detail.pos
+        length, width = detail.size
+        if detail.kind == "sensor_rail":
+            cv.rect(x, y, length, width, shade(pal.trim, 1.15), radius=0.15)
+            cv.line((x - length * 0.4, y), (x + length * 0.4, y),
+                    pal.accent, 0.13)
+            for offset in (-0.25, 0, 0.25):
+                cv.line((x + length * offset, y - width * 0.35),
+                        (x + length * offset, y + width * 0.35),
+                        shade(pal.superstructure, 0.75), 0.18)
+        elif detail.kind == "cargo_cell":
+            cv.rect(x + 0.45, y + 0.45, length, width, (0, 0, 0, 65), radius=0.25)
+            cv.rect(x, y, length, width, shade(pal.deck, 0.53), radius=0.3)
+            cv.rect(x, y, length - 1, width - 1, shade(pal.roof, 0.78), radius=0.15)
+            for offset in (-0.27, 0, 0.27):
+                xx = x + length * offset
+                cv.line((xx, y - width * 0.36), (xx, y + width * 0.36),
+                        shade(pal.trim, 1.5), 0.2)
+        elif detail.kind == "armor_plate":
+            cv.rect(x + 0.45, y + 0.45, length, width, (0, 0, 0, 85), radius=0.2)
+            cv.rect(x, y, length, width, pal.armor, radius=0.18)
+            cv.rect(x, y, length - 0.7, width - 0.7,
+                    shade(pal.armor, 0.7), width=0.18, radius=0.18)
+            for sign in (-1, 1):
+                cv.circle(x + sign * (length / 2 - 0.85), y,
+                          0.25, shade(pal.trim, 1.35))
+        elif detail.kind == "radiator":
+            cv.rect(x, y, length, width, shade(pal.trim, 0.8), radius=0.15)
+            count = max(2, int(length / 1.2))
+            for i in range(count):
+                xx = x - length / 2 + length * (i + 0.5) / count
+                cv.line((xx, y - width * 0.37),
+                        (xx, y + width * 0.37),
+                        shade(pal.superstructure, 0.6), 0.22)
+        else:
+            raise ValueError(f"Unknown deck detail: {detail.kind}")
+
+
+
 def half_width(hull_key, x):
     """Полуширина корпуса в точке x (интерполяция по профилю)."""
     prof = PROFILES[hull_key]
@@ -161,7 +207,8 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     stern = PROFILES[hull_key][-1][0]
     hw = max(y for _, y in PROFILES[hull_key])
     small = hull_key == "capsule"
-    rng = random.Random(hash((hull_key, pal_key)) & 0xffffff)
+    rng = random.Random(f"{hull_key}:{pal_key}") if HULLS[hull_key].visual is not None else (
+        random.Random(hash((hull_key, pal_key)) & 0xffffff))
     pirate = pal_key == "pirate"
     industrial = HULLS[hull_key].visual_style == "industrial_sci_fi"
 
@@ -281,6 +328,10 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
             ay = side * (half_width(hull_key, hx) + 0.4)
             cv.line((hx - 0.8, ay), (hx + 0.8, ay), (46, 46, 50), 0.25)          # якорь
             cv.line((hx, ay), (hx, ay + side * 0.9), (46, 46, 50), 0.2)
+
+    # --- характерные функциональные элементы для нового поколения корпусов
+    if industrial and HULLS[hull_key].visual is not None:
+        _industrial_details(cv, HULLS[hull_key].visual, pal)
 
     # --- основания башен
     for slot in HULLS[hull_key].slots:

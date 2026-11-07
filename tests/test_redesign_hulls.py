@@ -95,3 +95,39 @@ def test_fitting_diagram_has_clickable_mounts():
     displayed = {index for _, kind, index in port.zones if kind == "slot"}
     expected = {i for i, slot in enumerate(hull.hull.slots) if slot.category == "weapon"}
     assert displayed == expected
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_new_hulls_have_distinct_functional_deck_details(key):
+    from dataclasses import replace
+    import pygame
+
+    hull = HULLS[key]
+    visual = hull.visual
+    assert visual is not None
+    assert visual.details
+    allowed = {"sensor_rail", "cargo_cell", "armor_plate", "radiator"}
+    from nine.gfx.ship_art import half_width
+    for detail in visual.details:
+        assert detail.kind in allowed
+        x, y = detail.pos
+        length, width = detail.size
+        assert length > 0 and width > 0
+        for end in (x - length / 2, x, x + length / 2):
+            assert abs(y) + width / 2 < half_width(key, end) + 0.05
+
+    complete, _ = build_hull(key, "player", (), 0)
+    without = replace(hull, visual=replace(visual, details=()))
+    from nine.hulls import HULLS as registry
+    original = registry[key]
+    try:
+        registry[key] = without
+        plain, _ = build_hull(key, "player", (), 0)
+    finally:
+        registry[key] = original
+    assert pygame.image.tostring(complete, "RGBA") != pygame.image.tostring(plain, "RGBA")
+
+
+def test_new_hull_visual_kits_are_not_the_same():
+    kits = {tuple(detail.kind for detail in HULLS[key].visual.details) for key in NEW_HULLS}
+    assert len(kits) == len(NEW_HULLS)
