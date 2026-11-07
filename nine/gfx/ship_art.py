@@ -51,17 +51,23 @@ SUPERSTRUCTURE = {
     "barge": [(-21, 0, 7, 22, True)],
     "raider": [(-9, 0, 6, 7.5, True)],
     "capsule": [(0, 0, 5, 5, True)],
-    "needle": [(-5, 0, 10, 5.5, True)],
-    "manta": [(-8, 0, 11, 10, True)],
-    "bastion": [(-5, 0, 15, 10, True), (-17, 0, 6, 7, False)],
 }
 
 FUNNELS = {"corvette": [(-6, 0, 2.2)], "cruiser": [(-5.5, 0, 2.6)], "barge": [(-21, 0, 2.4)]}
 LIFEBOATS = {"corvette": [(-3, 1)], "cruiser": [(-2, 1), (-11, 1)], "barge": [(-16, 1)]}
 HATCHES = {"barge": [(14, 0, 7, 18), (-8, 0, 7, 18)]}
 MAST = {"scout": (-7.5, 0), "corvette": (-3, 0), "torpedo_boat": (1, 0), "cruiser": (5, 0), "barge": (-22.5, 0),
-        "raider": (-10, 0), "capsule": (0, 0), "needle": (-6, 0),
-        "manta": (-8, 0), "bastion": (-5, 0)}
+        "raider": (-10, 0), "capsule": (0, 0)}
+
+
+def superstructures(hull_key):
+    visual = HULLS[hull_key].visual
+    return visual.superstructures if visual is not None else SUPERSTRUCTURE.get(hull_key, ())
+
+
+def mast_position(hull_key):
+    visual = HULLS[hull_key].visual
+    return visual.mast if visual is not None else MAST.get(hull_key, (0, 0))
 
 
 def outline(key):
@@ -136,7 +142,7 @@ def half_width(hull_key, x):
 
 def _blocked(hull_key, x, y, pad=3.5):
     """Занято ли место надстройкой или установкой оружия (чтобы не ставить туда мелочь)."""
-    for sx, sy, lx, ly, _ in SUPERSTRUCTURE.get(hull_key, []):
+    for sx, sy, lx, ly, _ in superstructures(hull_key):
         if abs(x - sx) < lx / 2 + 1 and abs(y - sy) < ly / 2 + 1:
             return True
     for slot in HULLS[hull_key].slots:
@@ -185,19 +191,19 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     layer = _Canvas(extent)
     layer.poly(deck, pal.deck)
     if industrial:
-        # Крупные бронепанели и силовые швы вместо деревянных палубных досок.
-        x = stern + 5
-        while x < bow - 5:
+        # Швы и линии палубы из визуального чертежа.
+        visual = HULLS[hull_key].visual
+        for x in (visual.deck_ribs if visual else ()):
             width = half_width(hull_key, x) * 0.68
             if width > 2:
                 layer.line((x, -width), (x, width), shade(pal.deck, 0.64), 0.22)
                 for side in (-1, 1):
                     layer.line((x + 1.1, side * (width - 1.2)),
                                (x + 3.3, side * (width - 1.2)), shade(pal.deck, 1.23), 0.16)
-            x += 7.5
-        for side in (-1, 1):
-            layer.line((stern + 7, side * half_w * 0.28),
-                       (bow - 7, side * half_w * 0.28), shade(pal.deck, 0.8), 0.14)
+        for fraction in (visual.deck_strips if visual else ()):
+            for side in (-1, 1):
+                layer.line((stern + 7, side * half_w * fraction),
+                           (bow - 7, side * half_w * fraction), shade(pal.deck, 0.8), 0.14)
     else:
         y = -half_w + 1.1
         row = 0
@@ -302,7 +308,7 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     _static_modules(cv, hull_key, pal, static_modules, bow, stern, half_w)
 
     # --- надстройки: тень, корпус, крыша с оборудованием, крылья мостика, окна
-    for sx, sy, lx, ly, windows in SUPERSTRUCTURE.get(hull_key, []):
+    for sx, sy, lx, ly, windows in superstructures(hull_key):
         cv.rect(sx + 0.6, sy + 0.8, lx, ly, (0, 0, 0, 90), radius=0.8)
         if windows and not small:
             cv.rect(sx + lx / 2 - 1, sy, 2, ly + 2.4, pal.superstructure, radius=0.3)          # крылья мостика
@@ -338,7 +344,7 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
             cv.line((lx - 1.6, by), (lx + 1.6, by), (240, 170, 110), 0.12)
 
     # --- мачта и сенсоры (на новой серии без парусного такелажа)
-    mx, my = MAST.get(hull_key, (0, 0))
+    mx, my = mast_position(hull_key)
     if not small and not industrial:
         yard = half_width(hull_key, mx) * 0.55
         rig = shade(pal.deck, 0.55)
@@ -589,8 +595,8 @@ class ShipArt:
                                    max(1, int(cam.px(1.2))))
 
         # вращающаяся антенна радара
-        if ship.sensor and ship.hull.key in MAST:
-            mx, my = MAST[ship.hull.key]
+        if ship.sensor and (ship.hull.visual is not None or ship.hull.key in MAST):
+            mx, my = mast_position(ship.hull.key)
             base = cam.w2s(ship.pos + Vector2(mx, my).rotate(ship.angle))
             if ship.sensor.veil_resist:
                 pygame.draw.circle(screen, (110, 180, 190), base, max(2, int(cam.px(2.0))), 1)
@@ -609,7 +615,7 @@ def nav_lights(ship):
     half = max(y for _, y in prof)
     mid = next((x for x, y in prof if y >= half * 0.95), 0)
     stern = prof[-1][0]
-    mx, my = MAST.get(key, (0, 0))
+    mx, my = mast_position(key)
     pts = [((mid, -half), NAV_RED), ((mid, half), NAV_GREEN), ((stern, 0), NAV_WHITE), ((mx, my), NAV_WHITE)]
     return [(ship.pos + Vector2(x, y).rotate(ship.angle), col) for (x, y), col in pts]
 
@@ -617,7 +623,7 @@ def nav_lights(ship):
 def window_lights(ship):
     """Центры освещённых окон надстроек (для света ночью)."""
     out = []
-    for sx, sy, lx, ly, windows in SUPERSTRUCTURE.get(ship.hull.key, []):
+    for sx, sy, lx, ly, windows in superstructures(ship.hull.key):
         if windows:
             out.append(ship.pos + Vector2(sx + lx / 2, sy).rotate(ship.angle))
     return out

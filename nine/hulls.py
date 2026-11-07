@@ -20,6 +20,15 @@ class Slot:
 
 
 @dataclass(frozen=True)
+class HullVisual:
+    """Визуальные элементы корпуса; координаты: нос по +X."""
+    superstructures: tuple = ()  # x, y, length, width, front_windows
+    mast: tuple = (0.0, 0.0)
+    deck_ribs: tuple = ()        # x поперечных швов
+    deck_strips: tuple = ()      # доля полуширины продольных швов
+
+
+@dataclass(frozen=True)
 class HullDef:
     """`price` — цена голого корпуса; базовое оснащение оплачивается отдельно."""
     key: str
@@ -39,6 +48,7 @@ class HullDef:
     desc: str = ""
     series: str = ""          # линейка/производитель вместо игрового класса
     visual_style: str = "legacy"  # стиль художника; старые корпуса остаются совместимыми
+    visual: HullVisual | None = None
 
 
 def _core(engine, reactor, shield, armor, sensor):
@@ -109,6 +119,9 @@ _ALL = [
         default_fit=("autocannon_s", None, "engine_s2", "reactor_s2", "shield_s",
                      None, "sensor_s", None, None),
         series="Верфи «Северный контур»", visual_style="industrial_sci_fi",
+        visual=HullVisual(superstructures=((-5, 0, 10, 5.5, True),),
+                          mast=(-6, 0), deck_ribs=(-23, -14, -5, 4, 13, 22),
+                          deck_strips=(0.33,)),
         desc="Узкий индустриальный корпус с открытыми универсальными узлами. "
              "Подходит для разных лёгких сборок без обязательной роли.",
     ),
@@ -124,6 +137,9 @@ _ALL = [
         default_fit=("cannon_m", None, "autocannon_s", "engine_m", "reactor_m",
                      "shield_m", "armor_s", "sensor_s", "cargo_ext", None),
         series="Промышленная серия «Атлас»", visual_style="industrial_sci_fi",
+        visual=HullVisual(superstructures=((-8, 0, 11, 10, True),),
+                          mast=(-8, 0), deck_ribs=(-23, -12, -1, 10, 21),
+                          deck_strips=(0.29, 0.65)),
         desc="Широкая модульная палуба: выбор между артиллерией, перевозками "
              "и вспомогательным оборудованием.",
     ),
@@ -141,6 +157,10 @@ _ALL = [
                      "engine_m", "reactor_m", "shield_m", "armor_m", "sensor_s",
                      None, None),
         series="Конструкторское бюро «Рубеж»", visual_style="industrial_sci_fi",
+        visual=HullVisual(superstructures=((-5, 0, 15, 10, True),
+                                         (-17, 0, 6, 7, False)),
+                          mast=(-5, 0), deck_ribs=(-30, -20, -10, 0, 10, 20, 30),
+                          deck_strips=(0.38, 0.72)),
         desc="Тяжёлая силовая рама с разнесёнными башнями. Оружие и защиту "
              "можно заменить поддерживающими системами.",
     ),
