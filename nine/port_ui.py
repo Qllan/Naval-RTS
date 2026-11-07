@@ -624,18 +624,19 @@ class PortUI:
             pygame.draw.line(self.screen, ui.LINE, (x, yy + 17), (panel.right - 11, yy + 17))
             self.text(title, (x, yy), DIM, self.small)
 
-        def metric(label, key, yy, *, higher=True, signed=False):
+        def metric(label, key, yy, *, higher=True, signed=False, decimals=0):
             value = cur[key]
             changed = nxt is not None and abs(nxt[key] - value) > 0.05
             color = ui.GOOD if changed and ((nxt[key] > value) == higher) else (
                 ui.BAD if changed else UI)
             self.text(label, (x, yy), DIM, self.small)
+            fmt = f"+.{decimals}f" if signed else f".{decimals}f"
             if changed:
-                self.text(f"{value:.0f} > {nxt[key]:.0f}", (panel.right - 11, yy),
-                          color, self.small, right=True)
+                self.text(f"{format(value, fmt)} > {format(nxt[key], fmt)}",
+                          (panel.right - 11, yy), color, self.small, right=True)
             else:
-                text_value = f"{value:+.0f}" if signed else f"{value:.0f}"
-                self.text(text_value, (panel.right - 11, yy), color, self.small, right=True)
+                self.text(format(value, fmt), (panel.right - 11, yy),
+                          color, self.small, right=True)
 
         def meter(yy, amount, capacity, label, *, bad=False):
             self.text(label, (x, yy - 2), DIM, self.small)
@@ -657,7 +658,7 @@ class PortUI:
               cur["design_mass"] * 1.35,
               f"Проектный ориентир {cur['design_mass']:.0f}",
               bad=(nxt["total_mass"] if nxt else cur["total_mass"]) > cur["design_mass"])
-        metric("Бортовой перекос %", "side_shift", y + 179, higher=False)
+        metric("Бортовой перекос %", "side_shift", y + 179, higher=False, decimals=1)
 
         section("ЭНЕРГИЯ · ед/с", y + 207)
         metric("Реактор", "power_output", y + 230)
@@ -672,7 +673,7 @@ class PortUI:
         metric("Скорость", "speed", y + 357)
         metric("Разгон", "accel", y + 378)
         metric("Поворот", "turn", y + 399)
-        metric("Компоновка %", "layout_turn_pct", y + 420)
+        metric("Компоновка %", "layout_turn_pct", y + 420, decimals=1)
 
     def _stats(self, world, x, y, preview=None):
         """Сводка корабля; с `preview` — сравнение «было > станет»."""
