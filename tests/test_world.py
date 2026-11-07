@@ -274,3 +274,19 @@ def test_onboarding_goals_progress():
     assert {"mine", "sell"} <= w.goals_done
     assert w.goal[0] == 2
     assert any("Цель выполнена" in m for m, _, _ in w.log)
+
+
+def test_spending_special_ammo_does_not_disable_spotlight(world):
+    """Траты бронебойных снарядов не должны переключать отдельную систему освещения."""
+    from types import SimpleNamespace
+
+    world.spotlight = True
+    world.ammo_type = "ap"
+    world.captain.ammo_stock["ap"] = 2
+    world._spend_ammo([SimpleNamespace(ammo="ap")])
+    assert world.spotlight is True
+    assert world.captain.ammo_stock["ap"] == 1
+    world._spend_ammo([SimpleNamespace(ammo="ap")])
+    assert world.ammo_type == "std"
+    assert world.captain.ammo_stock["ap"] == 0
+    assert world.spotlight is True

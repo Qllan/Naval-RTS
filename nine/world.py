@@ -519,7 +519,6 @@ class World:
         if stock[self.ammo_type] == 0:
             self.say(f"{AMMO[self.ammo_type].name} снаряды кончились — стандартные.")
             self.ammo_type = "std"
-        self.spotlight = False
 
     def _activate_utility(self, idx):
         p = self.player
