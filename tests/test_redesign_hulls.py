@@ -184,6 +184,7 @@ def test_shipyard_display_preserves_global_row_indices(monkeypatch):
 
     class FakeWorld:
         t = 0.0
+        cargo_used = 0
         player = Ship("needle", (0, 0))
 
         def hull_offer(self, key):
