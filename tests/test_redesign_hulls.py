@@ -195,3 +195,41 @@ def test_shipyard_display_preserves_global_row_indices(monkeypatch):
     assert len(selected_rows) <= 8
     assert ui.sel in selected_rows
     assert max(selected_rows) - min(selected_rows) == len(selected_rows) - 1
+
+
+def test_weapon_arc_geometry_is_consistent_with_hull_directions():
+    from nine.port_ui import weapon_arc_points
+
+    forward = weapon_arc_points((100, 100), 0, 0, 20)
+    starboard = weapon_arc_points((100, 100), 90, 0, 20)
+    aft = weapon_arc_points((100, 100), 180, 0, 20)
+    port = weapon_arc_points((100, 100), -90, 0, 20)
+    assert forward[-1] == (100, 80)
+    assert starboard[-1] == (120, 100)
+    assert aft[-1] == (100, 120)
+    assert port[-1] == (80, 100)
+    wide = weapon_arc_points((100, 100), 0, 270, 20)
+    assert len(wide) > 15
+    assert wide[0] == (100, 100)
+
+
+def test_fitting_schematic_draws_selected_weapon_arc():
+    import pygame
+    from nine.port_ui import PortUI
+
+    pygame.font.init()
+    screen = pygame.Surface((1200, 800))
+    ui = PortUI(screen)
+    ship = Ship("bastion", (0, 0))
+    body = pygame.Rect(50, 100, 1000, 470)
+    ui.sel = 0
+    ui._hull_layout(ship, body, len(ship.hull.slots))
+    assert any(kind == "slot" for _, kind, _ in ui.zones)
+    # Candidate arc can be narrower than the hardpoint, but without
+    # modifying the live ship or the fitting.
+    candidate = list(ship.fit)
+    candidate[0] = "torpedo_m"
+    assert candidate[0] != ship.fit[0]
+    ui._hull_layout(ship, body, len(ship.hull.slots), candidate)
+    assert ship.fit[0] == "cannon_m"
+

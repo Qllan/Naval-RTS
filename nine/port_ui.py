@@ -4,6 +4,8 @@
 Backspace — снять модуль, G — группа огня, Esc — назад / выйти в море.
 """
 
+import math
+
 import pygame
 from pygame.math import Vector2
 
@@ -22,6 +24,23 @@ TABS = ("Сервис", "Верфь", "Оснащение", "Склад")
 GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
 DENSE = 0.8          # «плотная Пелена» для сравнения характеристик
 
+
+
+def weapon_arc_points(center, facing, arc, radius):
+    """Точки сектора на схеме: 0° — нос вверх, +90° — правый борт.
+
+    Сектор ограничен геометрией слота и реальным углом оружия. Чистая
+    функция, которую можно отдельно проверять без инициализации pygame.
+    """
+    arc = max(0.0, min(360.0, float(arc)))
+    steps = max(6, math.ceil(arc / 8.0))
+    cx, cy = center
+    points = [(round(cx), round(cy))]
+    for i in range(steps + 1):
+        angle = math.radians(facing - arc * 0.5 + arc * i / steps)
+        points.append((round(cx + radius * math.sin(angle)),
+                       round(cy - radius * math.cos(angle))))
+    return points
 
 
 def shipyard_window(total, selected, page_size=8):
@@ -606,8 +625,8 @@ class PortUI:
         self.art.draw(self.screen, cam, ship, "player", t)
         self.screen.set_clip(clip)
 
-    def _hull_layout(self, ship, body, row_count):
-        """Кликабельная схема наружных оружейных узлов.
+    def _hull_layout(self, ship, body, row_count, preview_fit=None):
+        """Кликабельная схема оружейных узлов и сектора выбранной установки.
 
         Внутренние системы остаются в списке, поскольку их физические
         позиции ещё не описаны в HullDef.
@@ -639,6 +658,30 @@ class PortUI:
         pygame.draw.line(self.screen, ui.FAINT, screen_pos(-max_x * 0.8, 0),
                          screen_pos(max_x * 0.8, 0), 1)
 
+        # Сектор выбранной установки: сначала полупрозрачная подложка,
+        # затем маркеры, которые всегда должны оставаться читаемыми.
+        selected_index = self.slot if self.picker else self.sel
+        if 0 <= selected_index < len(ship.hull.slots):
+            mount = ship.hull.slots[selected_index]
+            if mount.category == "weapon":
+                current_fit = ship.fit if preview_fit is None else preview_fit
+                key = current_fit[selected_index]
+                module = MODULES[key] if key else None
+                arc = min(mount.arc, module.arc) if isinstance(module, WeaponDef) else mount.arc
+                sx, sy = screen_pos(*mount.pos)
+                radius = max(24, min(43, height * 0.27))
+                verts = weapon_arc_points((sx - rect.x, sy - rect.y),
+                                          mount.facing, arc, radius)
+                overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
+                pygame.draw.polygon(overlay, (78, 170, 166, 56), verts)
+                pygame.draw.lines(overlay, (115, 216, 202, 170), False, verts, 2)
+                old_clip = self.screen.get_clip()
+                self.screen.set_clip(rect.inflate(-2, -2))
+                self.screen.blit(overlay, rect.topleft)
+                self.screen.set_clip(old_clip)
+                self.text(f"Узел {selected_index + 1}: сектор {arc:g}°",
+                          (rect.x + 10, rect.bottom - 20), ACCENT, self.small)
+
         for index, slot in enumerate(ship.hull.slots):
             if slot.category != "weapon":
                 continue
@@ -652,8 +695,10 @@ class PortUI:
             self.screen.blit(marker, marker.get_rect(center=(sx, sy)))
             self.zones.append((pygame.Rect(sx - 12, sy - 12, 24, 24), "slot", index))
 
-        self.text("Цифры — номера оружейных слотов; узлы кликабельны",
-                  (rect.x + 10, rect.bottom - 20), DIM, self.small)
+        if not (0 <= selected_index < len(ship.hull.slots)
+                and ship.hull.slots[selected_index].category == "weapon"):
+            self.text("Нажмите на узел оружия для выбора модуля",
+                      (rect.x + 10, rect.bottom - 20), DIM, self.small)
 
     def _fitting(self, world, body):
         p = world.player
@@ -683,7 +728,6 @@ class PortUI:
             self.text(f"Особые снаряды на борту — {ammo}", (body.x, body.y + len(rows) * 22 + 30), DIM,
                       self.small)
 
-        self._hull_layout(p, body, len(rows))
         x = body.x + 420
         preview = None
         if self.picker:
@@ -716,6 +760,11 @@ class PortUI:
                 fit = list(p.fit)
                 fit[self.slot] = key
                 preview = Ship(p.hull.key, (0, 0), fit=fit)
+                issue = world.install_problem(self.slot, key, from_storage=(src == "storage"))
+                self.text("УСТАНОВКА НЕДОСТУПНА" if issue else "УСТАНОВКА ДОСТУПНА",
+                          (x, body.bottom - 53), ui.BAD if issue else ui.GOOD, self.small)
+                if issue:
+                    self.wrapped(issue, (x, body.bottom - 33), 330, ui.BAD, self.small)
         else:
             key = p.fit[self.sel] if self.sel < len(p.fit) else None
             if key:
@@ -730,6 +779,7 @@ class PortUI:
                               (x, y + len(module_stats(m)) * 18), DIM, self.small)
             else:
                 self.text("Enter — выбрать модуль", (x, body.y), DIM)
+        self._hull_layout(p, body, len(rows), preview.fit if preview else None)
         self._stats(world, body.right - 250, body.y, preview)
 
     def _storage(self, world, body):

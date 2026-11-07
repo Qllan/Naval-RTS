@@ -979,8 +979,11 @@ class World:
         slot = self.player.hull.slots[slot_index]
         return [m for m in MODULES.values() if m.category == slot.category and m.size <= slot.size]
 
-    def install(self, slot_index, key, from_storage=False):
-        """Поставить модуль в слот. Возвращает None или текст ошибки."""
+    def install_problem(self, slot_index, key, from_storage=False):
+        """Проверка установки без каких-либо изменений денег, склада или корабля.
+
+        Используется и в интерфейсе предпросмотра, и в самой транзакции.
+        """
         p, cap = self.player, self.captain
         slot = p.hull.slots[slot_index]
         m = MODULES[key]
@@ -996,8 +999,15 @@ class World:
         new_fit = list(p.fit)
         new_fit[slot_index] = key
         power = [e for e in fit_problems(p.hull, new_fit) if "энергии" in e]
-        if power:
-            return power[0]
+        return power[0] if power else None
+
+    def install(self, slot_index, key, from_storage=False):
+        """Поставить модуль в слот. Возвращает None или текст ошибки."""
+        issue = self.install_problem(slot_index, key, from_storage=from_storage)
+        if issue:
+            return issue
+        p, cap = self.player, self.captain
+        m = MODULES[key]
         if from_storage:
             cap.storage.remove(key)
         else:

@@ -290,3 +290,34 @@ def test_spending_special_ammo_does_not_disable_spotlight(world):
     assert world.ammo_type == "std"
     assert world.captain.ammo_stock["ap"] == 0
     assert world.spotlight is True
+
+
+def test_install_preflight_is_read_only_and_shared_with_transaction(world):
+    from nine.modules import MODULES
+
+    slot_index = next(i for i, slot in enumerate(world.player.hull.slots)
+                      if slot.category == "weapon")
+    original_fit = list(world.player.fit)
+    credits_before = world.captain.credits
+    storage_before = list(world.captain.storage)
+    assert world.install_problem(slot_index, "autocannon_s") is None
+    assert world.player.fit == original_fit
+    assert world.captain.credits == credits_before
+    assert world.captain.storage == storage_before
+
+    world.captain.credits = 0
+    assert world.install_problem(slot_index, "autocannon_s") == "Не хватает кредитов"
+    assert world.install(slot_index, "autocannon_s") == "Не хватает кредитов"
+    assert world.player.fit == original_fit
+    assert world.captain.storage == storage_before
+
+
+def test_install_preflight_checks_storage_and_module_category(world):
+    slot_index = next(i for i, slot in enumerate(world.player.hull.slots)
+                      if slot.category == "weapon")
+    assert world.install_problem(slot_index, "engine_s") == "Модуль не подходит к слоту"
+    assert world.install_problem(slot_index, "autocannon_s", from_storage=True) == "Нет на складе"
+    world.captain.storage.append("autocannon_s")
+    assert world.install_problem(slot_index, "autocannon_s", from_storage=True) is None
+    assert "autocannon_s" in world.captain.storage
+
