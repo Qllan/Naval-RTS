@@ -1,7 +1,7 @@
 """Экран порта: сервис, верфь, оснащение, склад.
 
 Управление: A/D или стрелки — вкладки, W/S или стрелки — выбор, Enter — действие,
-Backspace — снять модуль, G — группа огня, Esc — назад / выйти в море.
+Backspace — снять модуль, G — группа огня, V — крупный чертёж, Esc — назад / выйти в море.
 """
 
 import math
@@ -24,6 +24,15 @@ TABS = ("Сервис", "Верфь", "Оснащение", "Склад")
 GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
 DENSE = 0.8          # «плотная Пелена» для сравнения характеристик
 
+
+
+def schematic_layout_rect(body, row_count, focus=False):
+    """Размер схемы в нормальном и в полноразмерном режимах fitting.
+
+    Полноразмерный режим не зависит от числа установленных модулей.
+    """
+    top = body.y + 34 if focus else max(body.y + row_count * 22 + 86, body.y + 295)
+    return pygame.Rect(body.x - 8, top, 400, max(0, body.bottom - top - 6))
 
 
 def schematic_side_slots(slots):
@@ -106,6 +115,7 @@ class PortUI:
         self.tab = 0
         self.sel = 0
         self.picker = False      # выбор модуля для слота
+        self.blueprint_focus = False  # V: расширенная инженерная схема
         self.pick_sel = 0
         self.slot = 0
         self.message = ("", UI)
@@ -152,6 +162,10 @@ class PortUI:
 
     def handle_key(self, key, world):
         """Возвращает 'leave', если игрок хочет выйти в море."""
+        if key == pygame.K_v and TABS[self.tab] == "Оснащение":
+            self.blueprint_focus = not self.blueprint_focus
+            self.sound("ui_click")
+            return None
         if key in (pygame.K_ESCAPE, pygame.K_f):
             if self.picker:
                 self.picker = False
@@ -244,7 +258,7 @@ class PortUI:
                 self._activate(world)
             elif kind == "slot":
                 if self.picker and idx != self.slot:
-                    self.slot, self.pick_sel = idx, 0
+                    self.slot, self.sel, self.pick_sel = idx, idx, 0
                     self.sound("ui_click")
                 else:
                     self.sel = idx
@@ -279,6 +293,10 @@ class PortUI:
         return None
 
     def _button(self, name, world):
+        if name == "blueprint" and TABS[self.tab] == "Оснащение":
+            self.blueprint_focus = not self.blueprint_focus
+            self.sound("ui_click")
+            return None
         if name == "leave":
             problems = world.undock_problems()
             if problems:
@@ -641,21 +659,20 @@ class PortUI:
         self.art.draw(self.screen, cam, ship, "player", t)
         self.screen.set_clip(clip)
 
-    def _hull_layout(self, ship, body, row_count, preview_fit=None):
+    def _hull_layout(self, ship, body, row_count, preview_fit=None, focus=False):
         """Чертёж корпуса: оружие на палубе, внутренние системы — по бортам.
 
         Внутренние узлы имеют отдельные координаты diagram_pos, которые
         задаются проектом корпуса. Бортовые ярлыки являются кликабельными,
         чтобы на узких корпусах значки не перекрывали друг друга.
         """
-        top = max(body.y + row_count * 22 + 56, body.y + 265)
-        available = body.bottom - top - 6
-        if available < 105:
+        rect = schematic_layout_rect(body, row_count, focus=focus)
+        if rect.h < 105:
             return
-        rect = pygame.Rect(body.x - 8, top, 400, available)
         pygame.draw.rect(self.screen, (12, 25, 34), rect)
         pygame.draw.rect(self.screen, ui.LINE, rect, 1)
-        self.text("СХЕМА КОРПУСА · НОС ВВЕРХ", (rect.x + 10, rect.y + 5), DIM, self.small)
+        self.text("ИНЖЕНЕРНЫЙ ЧЕРТЁЖ · НОС ВВЕРХ" if focus else
+                  "СХЕМА КОРПУСА · НОС ВВЕРХ", (rect.x + 10, rect.y + 5), DIM, self.small)
 
         shape = ship.hull.shape
         max_x = max(abs(x) for x, _ in shape)
@@ -704,11 +721,15 @@ class PortUI:
             "engine": "ДВ", "reactor": "РЕ", "shield": "ЩТ",
             "armor": "БР", "sensor": "СН", "utility": "УТ",
         }
-        row_step = min(26, max(20, (rect.h - 53) // max(1, max(len(s) for s in side_sets))))
+        longest = max((len(s) for s in side_sets), default=0)
+        if focus:
+            row_step = min(62, max(26, (rect.h - 110) // max(1, longest - 1)))
+        else:
+            row_step = min(26, max(20, (rect.h - 53) // max(1, longest)))
         for side, set_of_slots in enumerate(side_sets):
             card_x = rect.x + 9 if side == 0 else rect.right - 104
             for row_index, (index, slot) in enumerate(set_of_slots):
-                y = rect.y + 27 + row_index * row_step
+                y = rect.y + (46 if focus else 27) + row_index * row_step
                 card = pygame.Rect(card_x, y, 95, 21)
                 selected = index == selected_index
                 filled = current_fit[index] is not None
@@ -765,21 +786,29 @@ class PortUI:
                 label += f"  [{GROUP_NAME[w.group]}]"
             rows.append((label, UI if key else DIM, ui.MODULE_ICON[slot.category] if not key
                          else ui.module_icon_kind(MODULES[key])))
-        self._list(rows, body.x, body.y, 400, -1 if self.picker else self.sel, 22, zone="slot")
-        if self.drag and self.drag["active"]:            # подсветка слотов при перетаскивании
-            m = MODULES[self.drag["key"]]
-            for i, slot in enumerate(p.hull.slots):
-                ok = m.category == slot.category and m.size <= slot.size
-                if ok:
-                    pygame.draw.rect(self.screen, ui.GOOD, (body.x - 8, body.y + i * 22 - 4, 400, 22), 1)
-        if self.picker:
-            pygame.draw.rect(self.screen, (60, 90, 100), (body.x - 6, body.y + self.slot * 22 - 3, 400, 22), 1)
-        else:
-            self.text("G — группа огня выбранного орудия (ЛКМ / ПКМ / выкл.)",
-                      (body.x, body.y + len(rows) * 22 + 12), DIM, self.small)
-            ammo = ", ".join(f"{AMMO[k].name}: {v}" for k, v in world.captain.ammo_stock.items())
-            self.text(f"Особые снаряды на борту — {ammo}", (body.x, body.y + len(rows) * 22 + 30), DIM,
-                      self.small)
+        self._btn((body.x - 8, body.y, 400, 25),
+                  "V  ВЕРНУТЬ СПИСОК МОДУЛЕЙ" if self.blueprint_focus
+                  else "V  РАЗВЕРНУТЬ ИНЖЕНЕРНЫЙ ЧЕРТЁЖ",
+                  "blueprint", ACCENT)
+        if not self.blueprint_focus:
+            list_y = body.y + 30
+            self._list(rows, body.x, list_y, 400,
+                       -1 if self.picker else self.sel, 22, zone="slot")
+            if self.drag and self.drag["active"]:
+                m = MODULES[self.drag["key"]]
+                for i, slot in enumerate(p.hull.slots):
+                    if m.category == slot.category and m.size <= slot.size:
+                        pygame.draw.rect(self.screen, ui.GOOD,
+                                         (body.x - 8, list_y + i * 22 - 4, 400, 22), 1)
+            if self.picker:
+                pygame.draw.rect(self.screen, (60, 90, 100),
+                                 (body.x - 6, list_y + self.slot * 22 - 3, 400, 22), 1)
+            else:
+                self.text("G — группа огня выбранного орудия (ЛКМ / ПКМ / выкл.)",
+                          (body.x, list_y + len(rows) * 22 + 9), DIM, self.small)
+                ammo = ", ".join(f"{AMMO[k].name}: {v}" for k, v in world.captain.ammo_stock.items())
+                self.text(f"Особые снаряды на борту — {ammo}",
+                          (body.x, list_y + len(rows) * 22 + 27), DIM, self.small)
 
         x = body.x + 420
         preview = None
@@ -832,7 +861,8 @@ class PortUI:
                               (x, y + len(module_stats(m)) * 18), DIM, self.small)
             else:
                 self.text("Enter — выбрать модуль", (x, body.y), DIM)
-        self._hull_layout(p, body, len(rows), preview.fit if preview else None)
+        self._hull_layout(p, body, len(rows), preview.fit if preview else None,
+                          focus=self.blueprint_focus)
         self._stats(world, body.right - 250, body.y, preview)
 
     def _storage(self, world, body):

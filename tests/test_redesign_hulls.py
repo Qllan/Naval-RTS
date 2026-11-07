@@ -304,3 +304,61 @@ def test_legacy_hull_schematic_falls_back_to_slot_order():
         for column in columns:
             indices = [i for i, _ in column]
             assert indices == sorted(indices)
+
+
+def test_schematic_focus_rect_remains_large_for_many_slots():
+    import pygame
+    from nine.port_ui import schematic_layout_rect
+
+    body = pygame.Rect(148, 156, 1032, 470)
+    assert schematic_layout_rect(body, 11).h >= 105
+    assert schematic_layout_rect(body, 30).h < 105
+    expanded = schematic_layout_rect(body, 30, focus=True)
+    assert expanded.height >= 400
+    assert expanded.left == body.x - 8
+    assert expanded.bottom <= body.bottom
+
+
+def test_blueprint_mode_toggle_keyboard_and_button():
+    import pygame
+    from nine.port_ui import PortUI, TABS
+    from nine.world import World
+
+    pygame.font.init()
+    screen = pygame.Surface((1280, 720))
+    world = World(seed=9, first_event=1e9)
+    world.player = Ship("manta", world.port)
+    port = PortUI(screen)
+    port.tab = TABS.index("Оснащение")
+    assert not port.blueprint_focus
+    assert port.handle_key(pygame.K_v, world) is None
+    assert port.blueprint_focus
+    body = pygame.Rect(148, 156, 1032, 470)
+    port._fitting(world, body)
+    schematic = {index for rect,kind,index in port.zones if kind == "slot"}
+    assert schematic == set(range(len(world.player.hull.slots)))
+    button = next(rect for rect, kind, name in port.zones
+                  if kind == "button" and name == "blueprint")
+    port.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN,
+                                       {"pos":button.center, "button":1}),world)
+    assert not port.blueprint_focus
+    assert port.handle_key(pygame.K_v, world) is None
+    assert port.blueprint_focus
+
+
+def test_blueprint_focus_expands_all_three_schematics():
+    import pygame
+    from nine.port_ui import PortUI
+
+    pygame.font.init()
+    screen = pygame.Surface((1280, 720))
+    body = pygame.Rect(148, 156, 1032, 470)
+    for key in NEW_HULLS:
+        port = PortUI(screen)
+        port.blueprint_focus = True
+        ship = Ship(key, (0, 0))
+        port._hull_layout(ship, body, len(ship.hull.slots), focus=True)
+        click_zones = {index:rect for rect,kind,index in port.zones if kind == "slot"}
+        assert set(click_zones) == set(range(len(ship.hull.slots)))
+        for index, zone in click_zones.items():
+            assert zone.width > 0 and zone.height > 0

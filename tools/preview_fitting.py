@@ -1,4 +1,4 @@
-"""Create real headless port fitting screenshots for R0.5.
+"""Create real headless port fitting screenshots for R0.7.
 
 Usage:
   python tools/preview_fitting.py --output-dir fitting-previews
@@ -29,12 +29,14 @@ def render(output_dir):
         world.captain.credits = 10000
         for key in ("needle", "manta", "bastion"):
             world.player = Ship(key, world.port)
-            # Два кадра на корпус: сектор оружия и внутренний реакторный отсек.
-            for mode, category in (("weapons", "weapon"), ("systems", "reactor")):
+            # Три кадра: оружие, внутренние системы и крупный инженерный чертёж.
+            for mode, category in (("weapons", "weapon"), ("systems", "reactor"),
+                                   ("blueprint", "reactor")):
                 screen = pygame.Surface((1280, 720))
                 screen.fill((14, 28, 36))
                 port = PortUI(screen)
                 port.tab = 2  # Оснащение
+                port.blueprint_focus = mode == "blueprint"
                 port.sel = next(i for i, slot in enumerate(world.player.hull.slots)
                                 if slot.category == category)
                 port.draw(world, dt=0.4)
