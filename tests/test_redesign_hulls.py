@@ -452,3 +452,58 @@ def test_manta_bilateral_weapon_fit_improves_mass_symmetry():
     assert b["module_mass"] > a["module_mass"]
     # Better bilateral balance does not guarantee a faster ship: mass matters.
     assert b["speed"] < a["speed"]
+
+
+def test_engineering_notices_are_read_only_and_use_real_power_model():
+    from nine.engineering import engineering_notices
+
+    hull = HULLS["manta"]
+    reactor = next(i for i, s in enumerate(hull.slots) if s.category == "reactor")
+    fit = list(hull.default_fit)
+    fit[reactor] = "reactor_s"
+    ship = Ship("manta", (0, 0), fit=fit)
+    original = (list(ship.fit), ship.module_mass, ship.capacitor, ship.cargo_mass)
+    notices = engineering_notices(ship)
+    assert "veil_deficit" in {n.code for n in notices}
+    assert any("Пелене" in n.text for n in notices)
+    assert all(n.text and n.short for n in notices)
+    assert (list(ship.fit), ship.module_mass, ship.capacitor, ship.cargo_mass) == original
+
+
+def test_heavy_fit_advisory_is_not_a_new_fitting_limit():
+    from nine.engineering import engineering_notices
+    from nine.ship import fit_problems
+
+    ship = Ship("manta", (0, 0))
+    notices = engineering_notices(ship, cargo=50)
+    assert "heavy_fit" in {n.code for n in notices}
+    assert fit_problems(ship.hull, ship.fit) == []
+
+
+def test_veil_risk_does_not_automatically_block_installation():
+    from nine.engineering import engineering_notices
+    from nine.world import World
+
+    world = World(seed=9, first_event=1e9)
+    world.player = Ship("manta", world.port)
+    world.captain.credits = 10000
+    index = next(i for i,s in enumerate(world.player.hull.slots)
+                 if s.category == "reactor")
+    fit = list(world.player.fit)
+    fit[index] = "reactor_s"
+    candidate = Ship("manta", world.port, fit=fit)
+    assert "veil_deficit" in {n.code for n in engineering_notices(candidate)}
+    assert world.install_problem(index, "reactor_s") is None
+    assert world.player.fit[index] != "reactor_s"
+
+
+def test_missing_reactor_in_preview_is_not_installed():
+    from nine.engineering import engineering_notices
+
+    ship = Ship("needle", (0, 0))
+    fit = list(ship.fit)
+    reactor = next(i for i,s in enumerate(ship.hull.slots) if s.category == "reactor")
+    fit[reactor] = None
+    candidate = Ship("needle", (0, 0), fit=fit)
+    assert "veil_deficit" in {n.code for n in engineering_notices(candidate)}
+    assert ship.fit[reactor] is not None

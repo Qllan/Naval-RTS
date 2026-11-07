@@ -1,4 +1,4 @@
-"""Create real headless port fitting screenshots for R0.8.
+"""Create real headless port fitting screenshots for R0.10.
 
 Usage:
   python tools/preview_fitting.py --output-dir fitting-previews
@@ -29,10 +29,10 @@ def render(output_dir):
         world.captain.credits = 10000
         for key in ("needle", "manta", "bastion"):
             world.player = Ship(key, world.port)
-            # Пять кадров: оружие, системы, чертёж, энергия и баланс массы.
+            # Шесть кадров: оружие, системы, чертёж, энергия, масса, диагностика.
             for mode, category in (("weapons", "weapon"), ("systems", "reactor"),
                                    ("blueprint", "reactor"), ("compare", "reactor"),
-                                   ("layout", "weapon")):
+                                   ("layout", "weapon"), ("risk", "reactor")):
                 screen = pygame.Surface((1280, 720))
                 screen.fill((14, 28, 36))
                 port = PortUI(screen)
@@ -40,7 +40,7 @@ def render(output_dir):
                 port.blueprint_focus = mode == "blueprint"
                 port.sel = next(i for i, slot in enumerate(world.player.hull.slots)
                                 if slot.category == category)
-                if mode in ("compare", "layout"):
+                if mode in ("compare", "layout", "risk"):
                     port.picker = True
                     if mode == "layout":
                         # На «Манте» симметричная установка второй башни
@@ -49,7 +49,8 @@ def render(output_dir):
                                         if slot.category == "weapon"]
                         port.sel = weapon_slots[1] if len(weapon_slots) > 1 else weapon_slots[0]
                     port.slot = port.sel
-                    target = ("cannon_m" if mode == "layout" and key != "needle"
+                    target = ("reactor_s" if mode == "risk"
+                              else "cannon_m" if mode == "layout" and key != "needle"
                               else "autocannon_s" if mode == "layout"
                               else "reactor_s" if key == "needle" else "reactor_m2")
                     port.pick_sel = next(i for i, (_, module) in enumerate(port.picker_items(world))
