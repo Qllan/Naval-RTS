@@ -507,3 +507,29 @@ def test_missing_reactor_in_preview_is_not_installed():
     candidate = Ship("needle", (0, 0), fit=fit)
     assert "veil_deficit" in {n.code for n in engineering_notices(candidate)}
     assert ship.fit[reactor] is not None
+
+
+def test_engineering_risk_preview_does_not_purchase_module():
+    import pygame
+    from nine.port_ui import PortUI
+    from nine.world import World
+
+    pygame.font.init()
+    screen = pygame.Surface((1280, 720))
+    world = World(seed=9, first_event=1e9)
+    world.player = Ship("manta", world.port)
+    world.captain.credits = 10000
+    port = PortUI(screen)
+    port.tab = 2
+    port.picker = True
+    port.sel = next(i for i,s in enumerate(world.player.hull.slots)
+                    if s.category == "reactor")
+    port.slot = port.sel
+    port.pick_sel = next(i for i,(_,key) in enumerate(port.picker_items(world))
+                         if key == "reactor_s")
+    before = (tuple(world.player.fit), tuple(world.captain.storage),
+              world.captain.credits)
+    port.draw(world, dt=0.4)
+    assert (tuple(world.player.fit), tuple(world.captain.storage),
+            world.captain.credits) == before
+    assert any(kind == "pick" for _,kind,_ in port.zones)

@@ -11,6 +11,7 @@ from pygame.math import Vector2
 
 from . import config as C
 from .gfx import ui
+from .engineering import engineering_notices
 from .gfx.ship_art import ShipArt
 from .hulls import PLAYER_HULLS
 from .modules import AMMO, CATEGORY_NAME, MODULES, SIZE_NAME, WeaponDef, module_stats
@@ -553,8 +554,14 @@ class PortUI:
         fit = list(p.fit)
         fit[self.slot] = key
         cur = ship_summary(p, world.cargo_used)
-        new = ship_summary(Ship(p.hull.key, (0, 0), fit=fit), world.cargo_used)
+        candidate = Ship(p.hull.key, (0, 0), fit=fit)
+        new = ship_summary(candidate, world.cargo_used)
         lines = []
+        issue = world.install_problem(self.slot, key, from_storage=(src == "storage"))
+        if issue:
+            lines.append((f"НЕЛЬЗЯ УСТАНОВИТЬ: {issue}", ui.BAD))
+        for notice in engineering_notices(candidate, world.cargo_used, DENSE):
+            lines.append((f"! {notice.text}", WARN))
         for (label, a, higher), (_, b, _) in zip(cur, new):
             if abs(b - a) > 0.05:
                 if abs(a) > 1e-6:
@@ -618,7 +625,15 @@ class PortUI:
                if preview is not None else None)
 
         if nxt is not None:
-            self.text("Сейчас / после", (panel.right - 10, y + 20), DIM, self.small, right=True)
+            pass  # Разница показана стрелками рядом с изменившимися значениями
+
+        selected = preview if preview is not None else world.player
+        notices = engineering_notices(selected, world.cargo_used, DENSE)
+        if notices:
+            summary = notices[0].short + (f" (+{len(notices) - 1})" if len(notices) > 1 else "")
+            self.text(summary, (x, y + 22), WARN, self.small)
+        elif preview is None:
+            self.text("Проектные характеристики", (x, y + 22), DIM, self.small)
 
         def section(title, yy):
             pygame.draw.line(self.screen, ui.LINE, (x, yy + 17), (panel.right - 11, yy + 17))
@@ -923,11 +938,14 @@ class PortUI:
                 m = MODULES[key]
                 tag = "склад" if src == "storage" else f"{m.price} КК"
                 cur = " (стоит)" if p.fit[self.slot] == key and src == "shop" else ""
-                prow.append((f"{m.name} [{SIZE_NAME[m.size]}] — {tag}{cur}", ACCENT if src == "storage" else UI,
-                             ui.module_icon_kind(m)))
+                problem = world.install_problem(self.slot, key, from_storage=(src == "storage"))
+                state = " ×" if problem else ""
+                color = ui.BAD if problem else ACCENT if src == "storage" else UI
+                prow.append((f"{m.name} [{SIZE_NAME[m.size]}] — {tag}{cur}{state}",
+                             color, ui.module_icon_kind(m)))
             self.text(f"МОДУЛИ · {CATEGORY_NAME[p.hull.slots[self.slot].category]}",
                       (x, body.y - 2), DIM, self.small)
-            visible = 12
+            visible = 9
             first = max(0, min(self.pick_sel - visible + 1, len(prow) - visible))      # прокрутка
             self._list(prow[first:first + visible], x, body.y + 18, 330, self.pick_sel - first, 22, zone="pick",
                        first=first)
@@ -939,7 +957,7 @@ class PortUI:
             if items:
                 key = items[min(self.pick_sel, len(items) - 1)][1]
                 m = MODULES[key]
-                y = body.y + 18 + min(12, len(prow)) * 22 + 10
+                y = body.y + 18 + min(visible, len(prow)) * 22 + 10
                 y = self.wrapped(m.desc, (x, y), 330) + 4
                 for j, line in enumerate(module_stats(m)):
                     self.text(line, (x, y + j * 18), DIM, self.small)
@@ -947,6 +965,11 @@ class PortUI:
                 fit[self.slot] = key
                 preview = Ship(p.hull.key, (0, 0), fit=fit)
                 issue = world.install_problem(self.slot, key, from_storage=(src == "storage"))
+                advisory = engineering_notices(preview, world.cargo_used, DENSE)
+                if advisory:
+                    summary = advisory[0].short + (
+                        f" (+{len(advisory) - 1})" if len(advisory) > 1 else "")
+                    self.text("! " + summary, (x, body.bottom - 83), WARN, self.small)
                 self.text("УСТАНОВКА НЕДОСТУПНА" if issue else "УСТАНОВКА ДОСТУПНА",
                           (x, body.bottom - 53), ui.BAD if issue else ui.GOOD, self.small)
                 if issue:
