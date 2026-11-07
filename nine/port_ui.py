@@ -583,13 +583,62 @@ class PortUI:
         self.art.draw(self.screen, cam, ship, "player", t)
         self.screen.set_clip(clip)
 
+    def _hull_layout(self, ship, body, row_count):
+        """Кликабельная схема наружных оружейных узлов.
+
+        Внутренние системы остаются в списке, поскольку их физические
+        позиции ещё не описаны в HullDef.
+        """
+        top = max(body.y + row_count * 22 + 70, body.y + 286)
+        available = body.bottom - top - 6
+        if available < 82:
+            return
+        rect = pygame.Rect(body.x - 8, top, 400, available)
+        pygame.draw.rect(self.screen, (12, 25, 34), rect)
+        pygame.draw.rect(self.screen, ui.LINE, rect, 1)
+        self.text("СХЕМА КОРПУСА · НОС ВВЕРХ", (rect.x + 10, rect.y + 5), DIM, self.small)
+
+        shape = ship.hull.shape
+        max_x = max(abs(x) for x, _ in shape)
+        max_y = max(abs(y) for _, y in shape)
+        height = rect.h - 39
+        if max_x <= 0 or max_y <= 0 or height <= 0:
+            return
+        scale = min((rect.w - 100) / (2 * max_y), height / (2 * max_x))
+        cx, cy = rect.centerx, rect.y + 23 + height / 2
+
+        def screen_pos(x, y):
+            return (round(cx + y * scale), round(cy - x * scale))
+
+        points = [screen_pos(x, y) for x, y in shape]
+        pygame.draw.polygon(self.screen, (32, 49, 57), points)
+        pygame.draw.polygon(self.screen, ui.LINE, points, 2)
+        pygame.draw.line(self.screen, ui.FAINT, screen_pos(-max_x * 0.8, 0),
+                         screen_pos(max_x * 0.8, 0), 1)
+
+        for index, slot in enumerate(ship.hull.slots):
+            if slot.category != "weapon":
+                continue
+            sx, sy = screen_pos(*slot.pos)
+            selected = index == (self.slot if self.picker else self.sel)
+            color = ACCENT if selected else ui.GOOD if ship.fit[index] else DIM
+            radius = 11 if selected else 9
+            pygame.draw.circle(self.screen, (10, 19, 24), (sx, sy), radius)
+            pygame.draw.circle(self.screen, color, (sx, sy), radius, 2)
+            marker = self.small.render(str(index + 1), True, UI)
+            self.screen.blit(marker, marker.get_rect(center=(sx, sy)))
+            self.zones.append((pygame.Rect(sx - 12, sy - 12, 24, 24), "slot", index))
+
+        self.text("Цифры — номера оружейных слотов; узлы кликабельны",
+                  (rect.x + 10, rect.bottom - 20), DIM, self.small)
+
     def _fitting(self, world, body):
         p = world.player
         rows = []
         for i, slot in enumerate(p.hull.slots):
             key = p.fit[i]
             name = MODULES[key].name if key else "— пусто —"
-            label = f"{CATEGORY_NAME[slot.category]} {SIZE_NAME[slot.size]}: {name}"
+            label = f"{i + 1:02d}  {CATEGORY_NAME[slot.category]} {SIZE_NAME[slot.size]}: {name}"
             w = next((w for w in p.weapons if w.index == i), None)
             if w is not None:
                 label += f"  [{GROUP_NAME[w.group]}]"
@@ -611,6 +660,7 @@ class PortUI:
             self.text(f"Особые снаряды на борту — {ammo}", (body.x, body.y + len(rows) * 22 + 30), DIM,
                       self.small)
 
+        self._hull_layout(p, body, len(rows))
         x = body.x + 420
         preview = None
         if self.picker:

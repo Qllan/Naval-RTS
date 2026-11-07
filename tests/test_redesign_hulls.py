@@ -61,3 +61,37 @@ def test_role_comes_from_fit_not_fixed_hull_class():
 def test_legacy_hull_keys_remain_available_for_saves():
     for key in ("scout", "corvette", "torpedo_boat", "cruiser", "barge", "raider", "capsule"):
         assert key in HULLS
+
+
+def test_new_hulls_have_visual_blueprints():
+    from nine.gfx.ship_art import half_width, mast_position, superstructures
+    for key in NEW_HULLS:
+        hull = HULLS[key]
+        visual = hull.visual
+        assert visual is not None
+        assert superstructures(key) == visual.superstructures
+        assert mast_position(key) == visual.mast
+        assert visual.superstructures
+        assert len(visual.deck_ribs) >= 4
+        assert all(0 < y < 1 for y in visual.deck_strips)
+        assert all(half_width(key, x) > 1 for x in visual.deck_ribs)
+
+
+def test_legacy_art_still_uses_its_original_metadata():
+    from nine.gfx.ship_art import mast_position, superstructures
+    assert HULLS["scout"].visual is None
+    assert mast_position("scout") == (-7.5, 0)
+    assert len(superstructures("scout")) == 1
+
+
+def test_fitting_diagram_has_clickable_mounts():
+    import pygame
+    from nine.port_ui import PortUI
+    pygame.font.init()
+    screen = pygame.Surface((1200, 800))
+    port = PortUI(screen)
+    hull = Ship("manta", (0, 0))
+    port._hull_layout(hull, pygame.Rect(50, 100, 1000, 470), len(hull.hull.slots))
+    displayed = {index for _, kind, index in port.zones if kind == "slot"}
+    expected = {i for i, slot in enumerate(hull.hull.slots) if slot.category == "weapon"}
+    assert displayed == expected
