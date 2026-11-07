@@ -36,12 +36,12 @@ ACCENT = (95, 168, 173)
 def render(output):
     pygame.init()
     try:
-        surface = pygame.Surface((1500, 820))
+        surface = pygame.Surface((1500, 1068))
         surface.fill(BACKGROUND)
         heading = pygame.font.Font(None, 44)
         label = pygame.font.Font(None, 36)
         small = pygame.font.Font(None, 25)
-        text = heading.render("NAVAL-RTS  /  HULL DESIGN STUDY R0.3", True, MAIN)
+        text = heading.render("NAVAL-RTS  /  HULL DESIGN STUDY R0.4", True, MAIN)
         surface.blit(text, (52, 38))
         sub = small.render("Three constructions, one modular fitting system", True, MUTED)
         surface.blit(sub, (55, 87))
@@ -82,8 +82,31 @@ def render(output):
             slot_count = sum(s.category == "weapon" for s in ship.hull.slots)
             bottom = f"{slot_count} weapon mounts  |  {len(ship.hull.slots)} total module slots"
             surface.blit(small.render(bottom, True, MUTED), (x + 22, y + 594))
-        surface.blit(small.render("Preview only  ·  hulls and modules rendered by the game code", True, MUTED),
-                     (50, 789))
+        # Реальный игровой масштаб: проверяем силуэты отдельно от крупного вида.
+        from nine.gfx.camera import Camera
+        from nine.gfx.ship_art import ShipArt
+
+        art = ShipArt()
+        for i, (key, _, _) in enumerate(MODELS):
+            x = 38 + i * 493
+            pygame.draw.rect(surface, PANEL, (x, 790, 466, 226), border_radius=10)
+            pygame.draw.rect(surface, EDGE, (x, 790, 466, 226), 1, border_radius=10)
+            surface.blit(small.render("GAME SCALE / DISTANT vs STANDARD", True, MAIN),
+                         (x + 20, 808))
+            for column, zoom in enumerate((0.55, 1.75)):
+                stage = pygame.Surface((210, 150))
+                stage.fill(BACKGROUND)
+                cam = Camera(stage.get_width(), stage.get_height(), zoom=zoom)
+                cam.snap((0, 0))
+                art.draw(stage, cam, Ship(key, (0, 0), -90), "player", shadow=None)
+                dest = (x + 17 + column * 224, 846)
+                surface.blit(stage, dest)
+                pygame.draw.rect(surface, EDGE, (*dest, 210, 150), 1)
+                surface.blit(small.render(f"{zoom:.2f}x", True, MUTED),
+                             (dest[0] + 8, dest[1] + 7))
+
+        surface.blit(small.render("Preview only  ·  rendered by the game code, including compact LOD",
+                                  True, MUTED), (50, 1033))
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
         pygame.image.save(surface, str(output))

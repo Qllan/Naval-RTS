@@ -556,6 +556,43 @@ def build_turret(module_key, pal_key):
     return cv.surf
 
 
+
+# При дальнем масштабе тонкие палубные элементы исчезают после уменьшения:
+# компактный силуэт сохраняет обводку, направление носа и оружейные узлы.
+COMPACT_ZOOM = 1.0
+
+
+def draw_compact_hull(screen, cam, ship, pal_key):
+    """Читаемый на расстоянии корабль; только визуал, без игровой логики."""
+    pal = SHIP_PALETTES[pal_key]
+    pts = [cam.w2s(ship.pos + Vector2(x, y).rotate(ship.angle))
+           for x, y in ship.hull.shape]
+    if len(pts) < 3:
+        return
+    # Светлая обводка отделяет корпус от океана; внутренние цвета наследуют сторону.
+    pygame.draw.polygon(screen, shade(pal.trim, 0.65), pts)
+    inner = [cam.w2s(ship.pos + Vector2(x * 0.91, y * 0.86).rotate(ship.angle))
+             for x, y in ship.hull.shape]
+    pygame.draw.polygon(screen, pal.hull, inner)
+    pygame.draw.aalines(screen, shade(pal.superstructure, 1.08), True, pts)
+    # Продольная конструктивная ось + заметное обозначение носа.
+    forward = Vector2(1, 0).rotate(ship.angle)
+    stern = min(x for x, _ in ship.hull.shape)
+    bow = max(x for x, _ in ship.hull.shape)
+    a = cam.w2s(ship.pos + forward * (stern * 0.60))
+    b = cam.w2s(ship.pos + forward * (bow * 0.67))
+    pygame.draw.line(screen, shade(pal.deck, 1.1), a, b, 1)
+    tip = cam.w2s(ship.pos + forward * (bow * 0.79))
+    pygame.draw.circle(screen, pal.accent, tip, 2)
+
+    # При самом дальнем приближении достаточно показать занятые узлы.
+    # Детальные башни и эффекты вращения остаются на обычном масштабе.
+    for weapon in ship.weapons:
+        pygame.draw.circle(screen, pal.turret, cam.w2s(weapon.world_pos(ship)),
+                           2 if weapon.defn.size > 1 else 1)
+    if ship.hp < ship.hull.hp * 0.35:
+        pygame.draw.circle(screen, (204, 111, 78), cam.w2s(ship.pos), 2)
+
 # --- кэш и отрисовка ------------------------------------------------------
 
 class ShipArt:
@@ -607,6 +644,9 @@ class ShipArt:
 
     def draw(self, screen, cam, ship, pal_key, t=0.0, alpha=255, shadow=Vector2(3, 4)):
         """shadow — смещение тени в пикселях (по солнцу); None — без тени (ночь)."""
+        if ship.hull.visual_style == "industrial_sci_fi" and cam.zoom <= COMPACT_ZOOM and alpha == 255:
+            draw_compact_hull(screen, cam, ship, pal_key)
+            return
         key, (hull_img, shadow_img) = self._hull_master(ship, pal_key)
         center = cam.w2s(ship.pos)
         if shadow is not None:

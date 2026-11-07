@@ -23,6 +23,17 @@ GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
 DENSE = 0.8          # «плотная Пелена» для сравнения характеристик
 
 
+
+def shipyard_window(total, selected, page_size=8):
+    """Видимое окно каталога; selected всегда в нём при валидном индексе."""
+    if total <= 0:
+        return 0, 0
+    visible = max(1, min(total, page_size))
+    selected = max(0, min(total - 1, selected))
+    first = max(0, min(total - visible, selected - visible // 2))
+    return first, first + visible
+
+
 def ship_summary(ship, cargo=0.0):
     """Характеристики для сравнения: (подпись, значение, чем больше — тем лучше)."""
     ship.cargo_mass = cargo
@@ -543,16 +554,28 @@ class PortUI:
         self._stats(world, body.right - 300, body.y)
 
     def _shipyard(self, world, body):
+        # Ограничиваем число строк: каталог может состоять из десятков корпусов.
+        # При перемещении мышью/клавиатурой выбор остаётся видимым.
+        if not PLAYER_HULLS:
+            self.text("Нет доступных корпусов", (body.x, body.y), DIM)
+            return
+        self.sel = max(0, min(self.sel, len(PLAYER_HULLS) - 1))
+        page_size = max(1, min(8, (body.h - 160) // 26))
+        first, end = shipyard_window(len(PLAYER_HULLS), self.sel, page_size)
         rows = []
-        for h in PLAYER_HULLS:
+        for h in PLAYER_HULLS[first:end]:
             full, cost = world.hull_offer(h.key)
             mark = "  (ваш)" if h.key == world.player.hull.key else ""
             rows.append((f"{h.name:<18} {cost:>6} КК{mark}", ACCENT if mark else UI))
-        self._list(rows, body.x, body.y, 360, self.sel, 26)
+        self._list(rows, body.x, body.y, 360, self.sel - first, 26, first=first)
+        y_footer = body.y + len(rows) * 26 + 5
+        self.text(f"Корпуса {first + 1}–{end} из {len(PLAYER_HULLS)} · W/S или колесо",
+                  (body.x, y_footer), DIM, self.small)
         h = PLAYER_HULLS[self.sel]
         full, cost = world.hull_offer(h.key)
-        # витрина: корабль с базовым оснащением, носом вверх
-        show = pygame.Rect(body.x - 8, body.y + len(rows) * 26 + 12, 360, body.bottom - body.y - len(rows) * 26 - 12)
+        # Витрина сохраняет достаточную высоту независимо от размера каталога.
+        top = y_footer + 26
+        show = pygame.Rect(body.x - 8, top, 360, max(95, body.bottom - top))
         ui.panel(self.screen, show, "Витрина", ui.LINE, bg=(8, 18, 28, 255))
         self._showcase(Ship(h.key, (0, 0), -90), show, world.t)
         x, y = body.x + 390, body.y

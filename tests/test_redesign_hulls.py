@@ -131,3 +131,66 @@ def test_new_hulls_have_distinct_functional_deck_details(key):
 def test_new_hull_visual_kits_are_not_the_same():
     kits = {tuple(detail.kind for detail in HULLS[key].visual.details) for key in NEW_HULLS}
     assert len(kits) == len(NEW_HULLS)
+
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_compact_hull_is_rendered_at_distant_zoom(key):
+    import pygame
+    from nine.gfx.camera import Camera
+    from nine.gfx.ship_art import ShipArt
+
+    color = (7, 18, 25)
+    canvas = pygame.Surface((160, 160))
+    canvas.fill(color)
+    camera = Camera(160, 160, zoom=0.55)
+    camera.snap((0, 0))
+    ship = Ship(key, (0, 0), -90)
+    renderer = ShipArt()
+    renderer.draw(canvas, camera, ship, "player", shadow=None)
+    assert canvas.get_at((80, 80))[:3] != color
+    assert not renderer.masters  # no expensive sprite assembly at far zoom
+
+    camera.zoom = 1.75
+    renderer.draw(canvas, camera, ship, "player", shadow=None)
+    assert renderer.masters  # full detail is still used up close
+
+
+def test_shipyard_window_supports_large_hull_catalog():
+    from nine.port_ui import shipyard_window
+
+    assert shipyard_window(0, 0) == (0, 0)
+    assert shipyard_window(3, 2, 8) == (0, 3)
+    for i in range(60):
+        first, end = shipyard_window(60, i, 8)
+        assert end - first == 8
+        assert first <= i < end
+    assert shipyard_window(60, 59, 8) == (52, 60)
+
+
+def test_shipyard_display_preserves_global_row_indices(monkeypatch):
+    import pygame
+    import nine.port_ui as port_module
+    from nine.port_ui import PortUI
+
+    pygame.font.init()
+    screen = pygame.Surface((1200, 800))
+    ui = PortUI(screen)
+
+    # Existing definitions are replicated for UI stress testing only.
+    models = list(port_module.PLAYER_HULLS) * 8
+    monkeypatch.setattr(port_module, "PLAYER_HULLS", models)
+    ui.sel = 28
+
+    class FakeWorld:
+        t = 0.0
+        player = Ship("needle", (0, 0))
+
+        def hull_offer(self, key):
+            return (1000, 1000)
+
+    ui._shipyard(FakeWorld(), pygame.Rect(35, 90, 1050, 470))
+    selected_rows = [idx for rect, kind, idx in ui.zones if kind == "row"]
+    assert len(selected_rows) <= 8
+    assert ui.sel in selected_rows
+    assert max(selected_rows) - min(selected_rows) == len(selected_rows) - 1
