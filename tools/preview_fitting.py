@@ -28,17 +28,19 @@ def render(output_dir):
         world = World(seed=9, first_event=1e9)
         world.captain.credits = 10000
         for key in ("needle", "manta", "bastion"):
-            screen = pygame.Surface((1280, 720))
-            screen.fill((14, 28, 36))
             world.player = Ship(key, world.port)
-            port = PortUI(screen)
-            port.tab = 2  # Оснащение
-            port.sel = next(i for i, slot in enumerate(world.player.hull.slots)
-                            if slot.category == "weapon")
-            port.draw(world, dt=0.4)
-            output = output_dir / f"fitting-{key}.png"
-            pygame.image.save(screen, str(output))
-            paths.append(output)
+            # Два кадра на корпус: сектор оружия и внутренний реакторный отсек.
+            for mode, category in (("weapons", "weapon"), ("systems", "reactor")):
+                screen = pygame.Surface((1280, 720))
+                screen.fill((14, 28, 36))
+                port = PortUI(screen)
+                port.tab = 2  # Оснащение
+                port.sel = next(i for i, slot in enumerate(world.player.hull.slots)
+                                if slot.category == category)
+                port.draw(world, dt=0.4)
+                output = output_dir / f"fitting-{key}-{mode}.png"
+                pygame.image.save(screen, str(output))
+                paths.append(output)
         return paths
     finally:
         pygame.quit()

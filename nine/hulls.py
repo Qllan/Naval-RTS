@@ -17,6 +17,7 @@ class Slot:
     pos: tuple = (0.0, 0.0)
     facing: float = 0.0
     arc: float = 360.0
+    diagram_pos: tuple | None = None   # внутренний узел на схеме, НЕ координата стрельбы
 
 
 @dataclass(frozen=True)
@@ -64,9 +65,20 @@ class HullDef:
     visual: HullVisual | None = None
 
 
-def _core(engine, reactor, shield, armor, sensor):
-    return (Slot("engine", engine), Slot("reactor", reactor), Slot("shield", shield),
-            Slot("armor", armor), Slot("sensor", sensor))
+def _core(engine, reactor, shield, armor, sensor, *, diagram_positions=None):
+    """Пять внутренних узлов. Старые корпуса сохраняют прежнюю компоновку.
+
+    diagram_positions — реальные проектные точки в корпусе, а не логика
+    оружейных установок. Без неё узел виден только в списке.
+    """
+    pairs = (("engine", engine), ("reactor", reactor), ("shield", shield),
+             ("armor", armor), ("sensor", sensor))
+    if diagram_positions is None:
+        return tuple(Slot(cat, size) for cat, size in pairs)
+    if len(diagram_positions) != len(pairs):
+        raise ValueError("Нужно ровно пять координат внутренних узлов")
+    return tuple(Slot(cat, size, diagram_pos=pos)
+                 for (cat, size), pos in zip(pairs, diagram_positions))
 
 
 _ALL = [
@@ -128,7 +140,10 @@ _ALL = [
                (-28, -2), (-17, -5), (4, -5), (20, -3)),
         slots=(Slot("weapon", S, (15, 0), 0, 300),
                Slot("weapon", S, (-12, 0), 180, 300))
-        + _core(S, S, S, S, M) + (Slot("utility", S), Slot("utility", S)),
+        + _core(S, S, S, S, M, diagram_positions=(
+            (-24, 0), (-18, 0), (-3, 1.8), (-3, -1.8), (9, 0)))
+        + (Slot("utility", S, diagram_pos=(3, -2)),
+           Slot("utility", S, diagram_pos=(3, 2))),
         default_fit=("autocannon_s", None, "engine_s2", "reactor_s2", "shield_s",
                      None, "sensor_s", None, None),
         series="Верфи «Северный контур»", visual_style="industrial_sci_fi",
@@ -151,7 +166,10 @@ _ALL = [
         slots=(Slot("weapon", M, (13, -8), -40, 200),
                Slot("weapon", M, (13, 8), 40, 200),
                Slot("weapon", S, (-20, 0), 180, 260))
-        + _core(M, M, M, M, M) + (Slot("utility", S), Slot("utility", M)),
+        + _core(M, M, M, M, M, diagram_positions=(
+            (-23, 0), (-15, 0), (-2, 0), (-5, 9), (10, 0)))
+        + (Slot("utility", S, diagram_pos=(3, -7)),
+           Slot("utility", M, diagram_pos=(3, 7))),
         default_fit=("cannon_m", None, "autocannon_s", "engine_m", "reactor_m",
                      "shield_m", "armor_s", "sensor_s", "cargo_ext", None),
         series="Промышленная серия «Атлас»", visual_style="industrial_sci_fi",
@@ -175,7 +193,10 @@ _ALL = [
                Slot("weapon", M, (-22, 0), 180, 265),
                Slot("weapon", S, (0, -11), -90, 180),
                Slot("weapon", S, (0, 11), 90, 180))
-        + _core(M, M, M, M, M) + (Slot("utility", S), Slot("utility", S)),
+        + _core(M, M, M, M, M, diagram_positions=(
+            (-30, 0), (-17, 0), (-4, 0), (13, 0), (27, 0)))
+        + (Slot("utility", S, diagram_pos=(-10, -9)),
+           Slot("utility", S, diagram_pos=(-10, 9))),
         default_fit=("cannon_m", "cannon_m", "autocannon_s", "autocannon_s",
                      "engine_m", "reactor_m", "shield_m", "armor_m", "sensor_s",
                      None, None),

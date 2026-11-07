@@ -93,8 +93,7 @@ def test_fitting_diagram_has_clickable_mounts():
     hull = Ship("manta", (0, 0))
     port._hull_layout(hull, pygame.Rect(50, 100, 1000, 470), len(hull.hull.slots))
     displayed = {index for _, kind, index in port.zones if kind == "slot"}
-    expected = {i for i, slot in enumerate(hull.hull.slots) if slot.category == "weapon"}
-    assert displayed == expected
+    assert displayed == set(range(len(hull.hull.slots)))
 
 
 @pytest.mark.parametrize("key", NEW_HULLS)
@@ -233,3 +232,50 @@ def test_fitting_schematic_draws_selected_weapon_arc():
     ui._hull_layout(ship, body, len(ship.hull.slots), candidate)
     assert ship.fit[0] == "cannon_m"
 
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_all_new_ship_systems_have_real_schematic_coordinates(key):
+    from nine.gfx.ship_art import half_width
+
+    hull = HULLS[key]
+    for slot in hull.slots:
+        if slot.category == "weapon":
+            assert slot.diagram_pos is None
+            continue
+        assert slot.diagram_pos is not None
+        x, y = slot.diagram_pos
+        assert abs(y) < half_width(key, x) - 0.1
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_entire_ship_schematic_is_clickable_and_preview_safe(key):
+    import pygame
+    from nine.port_ui import PortUI
+
+    pygame.font.init()
+    screen = pygame.Surface((1280, 720))
+    port = PortUI(screen)
+    ship = Ship(key, (0, 0))
+    body = pygame.Rect(140, 156, 1032, 470)
+    port.sel = next(i for i, slot in enumerate(ship.hull.slots)
+                    if slot.category == "reactor")
+    saved_fit = tuple(ship.fit)
+    port._hull_layout(ship, body, len(ship.hull.slots))
+    zones = {idx: rect for rect, kind, idx in port.zones if kind == "slot"}
+    assert set(zones) == set(range(len(ship.hull.slots)))
+    assert port._zone_at(zones[port.sel].center) == ("slot", port.sel)
+    assert ship.fit == list(saved_fit)
+
+    candidate = list(ship.fit)
+    candidate[port.sel] = None
+    port.zones.clear()
+    port._hull_layout(ship, body, len(ship.hull.slots), candidate)
+    assert port._zone_at(zones[port.sel].center) == ("slot", port.sel)
+    assert ship.fit == list(saved_fit)
+
+
+def test_legacy_hulls_have_unchanged_internal_layout_defaults():
+    for key in ("scout", "corvette", "torpedo_boat", "cruiser", "barge"):
+        assert all(slot.diagram_pos is None for slot in HULLS[key].slots
+                   if slot.category != "weapon")

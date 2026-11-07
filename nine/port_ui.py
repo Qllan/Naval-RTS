@@ -626,14 +626,15 @@ class PortUI:
         self.screen.set_clip(clip)
 
     def _hull_layout(self, ship, body, row_count, preview_fit=None):
-        """Кликабельная схема оружейных узлов и сектора выбранной установки.
+        """Чертёж корпуса: оружие на палубе, внутренние системы — по бортам.
 
-        Внутренние системы остаются в списке, поскольку их физические
-        позиции ещё не описаны в HullDef.
+        Внутренние узлы имеют отдельные координаты diagram_pos, которые
+        задаются проектом корпуса. Бортовые ярлыки являются кликабельными,
+        чтобы на узких корпусах значки не перекрывали друг друга.
         """
-        top = max(body.y + row_count * 22 + 70, body.y + 286)
+        top = max(body.y + row_count * 22 + 56, body.y + 265)
         available = body.bottom - top - 6
-        if available < 82:
+        if available < 105:
             return
         rect = pygame.Rect(body.x - 8, top, 400, available)
         pygame.draw.rect(self.screen, (12, 25, 34), rect)
@@ -643,10 +644,11 @@ class PortUI:
         shape = ship.hull.shape
         max_x = max(abs(x) for x, _ in shape)
         max_y = max(abs(y) for _, y in shape)
-        height = rect.h - 39
+        height = rect.h - 43
         if max_x <= 0 or max_y <= 0 or height <= 0:
             return
-        scale = min((rect.w - 100) / (2 * max_y), height / (2 * max_x))
+        # Бортовые таблички занимают две боковые полосы по ~100px.
+        scale = min((rect.w - 234) / (2 * max_y), height / (2 * max_x))
         cx, cy = rect.centerx, rect.y + 23 + height / 2
 
         def screen_pos(x, y):
@@ -658,18 +660,17 @@ class PortUI:
         pygame.draw.line(self.screen, ui.FAINT, screen_pos(-max_x * 0.8, 0),
                          screen_pos(max_x * 0.8, 0), 1)
 
-        # Сектор выбранной установки: сначала полупрозрачная подложка,
-        # затем маркеры, которые всегда должны оставаться читаемыми.
+        current_fit = ship.fit if preview_fit is None else preview_fit
         selected_index = self.slot if self.picker else self.sel
-        if 0 <= selected_index < len(ship.hull.slots):
+        has_selection = 0 <= selected_index < len(ship.hull.slots)
+        if has_selection:
             mount = ship.hull.slots[selected_index]
             if mount.category == "weapon":
-                current_fit = ship.fit if preview_fit is None else preview_fit
                 key = current_fit[selected_index]
                 module = MODULES[key] if key else None
                 arc = min(mount.arc, module.arc) if isinstance(module, WeaponDef) else mount.arc
                 sx, sy = screen_pos(*mount.pos)
-                radius = max(24, min(43, height * 0.27))
+                radius = max(23, min(43, height * 0.28))
                 verts = weapon_arc_points((sx - rect.x, sy - rect.y),
                                           mount.facing, arc, radius)
                 overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
@@ -679,26 +680,64 @@ class PortUI:
                 self.screen.set_clip(rect.inflate(-2, -2))
                 self.screen.blit(overlay, rect.topleft)
                 self.screen.set_clip(old_clip)
-                self.text(f"Узел {selected_index + 1}: сектор {arc:g}°",
-                          (rect.x + 10, rect.bottom - 20), ACCENT, self.small)
 
+        # Подписи внутренних систем формируют два читабельных ряда с
+        # направляющими к их собственным проектным точкам внутри корпуса.
+        systems = [(i, slot) for i, slot in enumerate(ship.hull.slots)
+                   if slot.category != "weapon"]
+        abbreviations = {
+            "engine": "ДВ", "reactor": "РЕ", "shield": "ЩТ",
+            "armor": "БР", "sensor": "СН", "utility": "УТ",
+        }
+        side_sets = (systems[::2], systems[1::2])
+        row_step = min(26, max(20, (rect.h - 53) // max(1, max(len(s) for s in side_sets))))
+        for side, set_of_slots in enumerate(side_sets):
+            card_x = rect.x + 9 if side == 0 else rect.right - 104
+            for row_index, (index, slot) in enumerate(set_of_slots):
+                y = rect.y + 27 + row_index * row_step
+                card = pygame.Rect(card_x, y, 95, 21)
+                selected = index == selected_index
+                filled = current_fit[index] is not None
+                color = ACCENT if selected else ui.GOOD if filled else DIM
+                pygame.draw.rect(self.screen, ui.SEL_BG if selected else (14, 31, 39), card)
+                pygame.draw.rect(self.screen, color, card, 1)
+                label = f"{index + 1:02d} {abbreviations.get(slot.category, '??')} {SIZE_NAME[slot.size]}"
+                self.text(label, (card.x + 7, card.y + 2), color, self.small)
+                self.zones.append((card, "slot", index))
+                if slot.diagram_pos is not None:
+                    sx, sy = screen_pos(*slot.diagram_pos)
+                    endpoint = (card.right, card.centery) if side == 0 else (card.left, card.centery)
+                    pygame.draw.line(self.screen, color if selected else ui.FAINT,
+                                     endpoint, (sx, sy), 2 if selected else 1)
+                    pygame.draw.circle(self.screen, color, (sx, sy), 4 if selected else 2)
+
+        # Оружейные узлы всегда рисуются поверх внутренних линий.
         for index, slot in enumerate(ship.hull.slots):
             if slot.category != "weapon":
                 continue
             sx, sy = screen_pos(*slot.pos)
-            selected = index == (self.slot if self.picker else self.sel)
-            color = ACCENT if selected else ui.GOOD if ship.fit[index] else DIM
-            radius = 11 if selected else 9
+            selected = index == selected_index
+            color = ACCENT if selected else ui.GOOD if current_fit[index] else DIM
+            radius = 10 if selected else 8
             pygame.draw.circle(self.screen, (10, 19, 24), (sx, sy), radius)
             pygame.draw.circle(self.screen, color, (sx, sy), radius, 2)
             marker = self.small.render(str(index + 1), True, UI)
             self.screen.blit(marker, marker.get_rect(center=(sx, sy)))
-            self.zones.append((pygame.Rect(sx - 12, sy - 12, 24, 24), "slot", index))
+            self.zones.append((pygame.Rect(sx - 11, sy - 11, 22, 22), "slot", index))
 
-        if not (0 <= selected_index < len(ship.hull.slots)
-                and ship.hull.slots[selected_index].category == "weapon"):
-            self.text("Нажмите на узел оружия для выбора модуля",
-                      (rect.x + 10, rect.bottom - 20), DIM, self.small)
+        if has_selection:
+            slot = ship.hull.slots[selected_index]
+            chosen = current_fit[selected_index]
+            status = "занят" if chosen is not None else "пуст"
+            detail = f"Узел {selected_index + 1:02d} · {CATEGORY_NAME[slot.category]} {SIZE_NAME[slot.size]} · {status}"
+            if slot.category == "weapon":
+                module = MODULES[chosen] if chosen else None
+                arc = min(slot.arc, module.arc) if isinstance(module, WeaponDef) else slot.arc
+                detail += f" · сектор {arc:g}°"
+            self.text(detail, (rect.x + 9, rect.bottom - 19), ACCENT, self.small)
+        else:
+            self.text("Выберите узел на чертеже или в списке", (rect.x + 9, rect.bottom - 19),
+                      DIM, self.small)
 
     def _fitting(self, world, body):
         p = world.player
