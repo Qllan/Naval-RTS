@@ -557,7 +557,7 @@ class PortUI:
         self._showcase(Ship(h.key, (0, 0), -90), show, world.t)
         x, y = body.x + 390, body.y
         self.text(h.name, (x, y), ACCENT, self.big)
-        self.text(h.role, (x, y + 30), DIM)
+        self.text(h.series or h.role, (x, y + 30), DIM)
         self.wrapped(h.desc, (x, y + 52), 600)
         self.text(f"Цена с базовым оснащением {full} КК, со сдачей текущего корпуса {cost} КК",
                   (x, y + 74), UI, self.small)

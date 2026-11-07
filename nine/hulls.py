@@ -37,6 +37,8 @@ class HullDef:
     default_fit: tuple       # ключ модуля (или None) на каждый слот
     purchasable: bool = True
     desc: str = ""
+    series: str = ""          # линейка/производитель вместо игрового класса
+    visual_style: str = "legacy"  # стиль художника; старые корпуса остаются совместимыми
 
 
 def _core(engine, reactor, shield, armor, sensor):
@@ -93,6 +95,54 @@ _ALL = [
         default_fit=("autocannon_s", "engine_m", "reactor_m", "shield_s", "armor_s", "sensor_s", "drill",
                      "collector", None),
         desc="Огромный трюм и слоты под добычу. Гружёная — медленная.",
+    ),
+    # --- R0: проекты корпусов без фиксированных игровых классов ----------
+    # Техническая специализация задаётся геометрией и узлами; роль — сборкой.
+    HullDef(
+        "needle", "N-17 «Игла»", "Узкий корпус, лёгкое оснащение, высокая манёвренность",
+        hp=105, mass=58, speed_mult=1.07, turn_rate=145, cargo=28, radius=18, price=850,
+        shape=((30, 0), (20, 3), (4, 5), (-17, 5), (-28, 2), (-30, 0),
+               (-28, -2), (-17, -5), (4, -5), (20, -3)),
+        slots=(Slot("weapon", S, (15, 0), 0, 300),
+               Slot("weapon", S, (-12, 0), 180, 300))
+        + _core(S, S, S, S, M) + (Slot("utility", S), Slot("utility", S)),
+        default_fit=("autocannon_s", None, "engine_s2", "reactor_s2", "shield_s",
+                     None, "sensor_s", None, None),
+        series="Верфи «Северный контур»", visual_style="industrial_sci_fi",
+        desc="Узкий индустриальный корпус с открытыми универсальными узлами. "
+             "Подходит для разных лёгких сборок без обязательной роли.",
+    ),
+    HullDef(
+        "manta", "M-08 «Манта»", "Широкая палуба, разнесённое вооружение, большой трюм",
+        hp=205, mass=145, speed_mult=0.91, turn_rate=92, cargo=56, radius=26, price=1900,
+        shape=((27, 0), (17, 9), (5, 14), (-18, 13), (-28, 7), (-29, 0),
+               (-28, -7), (-18, -13), (5, -14), (17, -9)),
+        slots=(Slot("weapon", M, (13, -8), -40, 200),
+               Slot("weapon", M, (13, 8), 40, 200),
+               Slot("weapon", S, (-20, 0), 180, 260))
+        + _core(M, M, M, M, M) + (Slot("utility", S), Slot("utility", M)),
+        default_fit=("cannon_m", None, "autocannon_s", "engine_m", "reactor_m",
+                     "shield_m", "armor_s", "sensor_s", "cargo_ext", None),
+        series="Промышленная серия «Атлас»", visual_style="industrial_sci_fi",
+        desc="Широкая модульная палуба: выбор между артиллерией, перевозками "
+             "и вспомогательным оборудованием.",
+    ),
+    HullDef(
+        "bastion", "B-31 «Оплот»", "Жёсткая броневая платформа, четыре оружейных узла",
+        hp=280, mass=185, speed_mult=0.82, turn_rate=76, cargo=42, radius=30, price=2500,
+        shape=((35, 0), (27, 8), (13, 13), (-23, 14), (-34, 8), (-36, 0),
+               (-34, -8), (-23, -14), (13, -13), (27, -8)),
+        slots=(Slot("weapon", M, (19, 0), 0, 265),
+               Slot("weapon", M, (-22, 0), 180, 265),
+               Slot("weapon", S, (0, -11), -90, 180),
+               Slot("weapon", S, (0, 11), 90, 180))
+        + _core(M, M, M, M, M) + (Slot("utility", S), Slot("utility", S)),
+        default_fit=("cannon_m", "cannon_m", "autocannon_s", "autocannon_s",
+                     "engine_m", "reactor_m", "shield_m", "armor_m", "sensor_s",
+                     None, None),
+        series="Конструкторское бюро «Рубеж»", visual_style="industrial_sci_fi",
+        desc="Тяжёлая силовая рама с разнесёнными башнями. Оружие и защиту "
+             "можно заменить поддерживающими системами.",
     ),
     # --- только для NPC и особых случаев ---------------------------------
     HullDef(

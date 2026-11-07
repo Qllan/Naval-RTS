@@ -30,6 +30,18 @@ PROFILES = {
     "capsule": [(8.5, 0), (7, 3.6), (3, 5.8), (-3, 5.8), (-7, 3.6), (-8.5, 0)],
 }
 
+# Новые корпуса берут форму непосредственно из каталога, без второго
+# перечня ключей в рендерере. Старые профили сохраняются для совместимости.
+def _profile_from_shape(shape):
+    half = [(float(x), float(y)) for x, y in shape if y >= 0]
+    half.sort(key=lambda point: -point[0])
+    return half
+
+
+for _key, _definition in HULLS.items():
+    PROFILES.setdefault(_key, _profile_from_shape(_definition.shape))
+
+
 # Надстройки: (x, y, длина, ширина, окна спереди)
 SUPERSTRUCTURE = {
     "scout": [(-5, 0, 9, 7, True)],
@@ -39,13 +51,17 @@ SUPERSTRUCTURE = {
     "barge": [(-21, 0, 7, 22, True)],
     "raider": [(-9, 0, 6, 7.5, True)],
     "capsule": [(0, 0, 5, 5, True)],
+    "needle": [(-5, 0, 10, 5.5, True)],
+    "manta": [(-8, 0, 11, 10, True)],
+    "bastion": [(-5, 0, 15, 10, True), (-17, 0, 6, 7, False)],
 }
 
 FUNNELS = {"corvette": [(-6, 0, 2.2)], "cruiser": [(-5.5, 0, 2.6)], "barge": [(-21, 0, 2.4)]}
 LIFEBOATS = {"corvette": [(-3, 1)], "cruiser": [(-2, 1), (-11, 1)], "barge": [(-16, 1)]}
 HATCHES = {"barge": [(14, 0, 7, 18), (-8, 0, 7, 18)]}
 MAST = {"scout": (-7.5, 0), "corvette": (-3, 0), "torpedo_boat": (1, 0), "cruiser": (5, 0), "barge": (-22.5, 0),
-        "raider": (-10, 0), "capsule": (0, 0)}
+        "raider": (-10, 0), "capsule": (0, 0), "needle": (-6, 0),
+        "manta": (-8, 0), "bastion": (-5, 0)}
 
 
 def outline(key):
@@ -141,9 +157,10 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     small = hull_key == "capsule"
     rng = random.Random(hash((hull_key, pal_key)) & 0xffffff)
     pirate = pal_key == "pirate"
+    industrial = HULLS[hull_key].visual_style == "industrial_sci_fi"
 
     # --- борт: ватерлиния (сурик), обшивка, затенение правого борта
-    cv.poly(pts, (116, 42, 36) if not pirate else (92, 44, 30))
+    cv.poly(pts, (37, 55, 63) if industrial else (116, 42, 36) if not pirate else (92, 44, 30))
     inner = _scaled(pts, 0.985, 0.94)
     cv.poly(inner, pal.hull)
     cv.poly([(x, y) for x, y in inner if y >= 0] + [(stern * 0.985, 0)], shade(pal.hull, 0.8))
@@ -167,16 +184,31 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     # доски рисуем на отдельном слое и обрезаем по форме палубы
     layer = _Canvas(extent)
     layer.poly(deck, pal.deck)
-    y = -half_w + 1.1
-    row = 0
-    while y < half_w:
-        layer.line((stern, y), (bow, y), pal.plank, 0.1)
-        x = stern + (row % 3) * 2.3
-        while x < bow:
-            layer.line((x, y), (x, y + 1.1), pal.plank, 0.08)
-            x += 7
-        y += 1.1
-        row += 1
+    if industrial:
+        # Крупные бронепанели и силовые швы вместо деревянных палубных досок.
+        x = stern + 5
+        while x < bow - 5:
+            width = half_width(hull_key, x) * 0.68
+            if width > 2:
+                layer.line((x, -width), (x, width), shade(pal.deck, 0.64), 0.22)
+                for side in (-1, 1):
+                    layer.line((x + 1.1, side * (width - 1.2)),
+                               (x + 3.3, side * (width - 1.2)), shade(pal.deck, 1.23), 0.16)
+            x += 7.5
+        for side in (-1, 1):
+            layer.line((stern + 7, side * half_w * 0.28),
+                       (bow - 7, side * half_w * 0.28), shade(pal.deck, 0.8), 0.14)
+    else:
+        y = -half_w + 1.1
+        row = 0
+        while y < half_w:
+            layer.line((stern, y), (bow, y), pal.plank, 0.1)
+            x = stern + (row % 3) * 2.3
+            while x < bow:
+                layer.line((x, y), (x, y + 1.1), pal.plank, 0.08)
+                x += 7
+            y += 1.1
+            row += 1
     mask = pygame.Surface(layer.surf.get_size(), pygame.SRCALPHA)
     pygame.draw.polygon(mask, (255, 255, 255, 255), [cv.p(x, y) for x, y in deck])
     layer.surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
@@ -219,8 +251,18 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
             cv.line((hx - lx / 2, hy - ly / 2 + k * ly / 4), (hx + lx / 2, hy - ly / 2 + k * ly / 4),
                     shade(pal.deck, 0.5), 0.15)
 
-    # --- носовое устройство: брашпиль, цепи, якоря
-    if not small:
+    # --- носовая аппаратура: индустриальные корпуса вместо якорной цепи
+    if industrial:
+        tx = bow * 0.74
+        cv.rect(tx, 0, 4.5, 3.0, shade(pal.superstructure, 0.62), radius=0.25)
+        cv.line((tx - 1.4, -0.85), (tx + 1.4, -0.85), pal.accent, 0.22)
+        for side in (-1, 1):
+            py = side * half_width(hull_key, stern * 0.52) * 0.58
+            for ix in range(3):
+                x = stern * 0.53 + ix * 2.0
+                cv.line((x, py - 0.6), (x + 0.5, py + 0.6),
+                        shade(pal.trim, 1.6), 0.28)
+    elif not small:
         wx = bow * 0.74
         cv.rect(wx, 0, 1.4, 2.6, shade(pal.trim, 1.3), radius=0.2)
         for side in (-1, 1):
@@ -295,19 +337,24 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
             cv.rect(lx, by, 4, 1.4, (215, 120, 60), radius=0.7)
             cv.line((lx - 1.6, by), (lx + 1.6, by), (240, 170, 110), 0.12)
 
-    # --- мачта с реем и такелаж
+    # --- мачта и сенсоры (на новой серии без парусного такелажа)
     mx, my = MAST.get(hull_key, (0, 0))
-    if not small:
+    if not small and not industrial:
         yard = half_width(hull_key, mx) * 0.55
         rig = shade(pal.deck, 0.55)
         for tx_, ty_ in ((bow - 1, 0), (stern + 1, 0), (mx, -half_width(hull_key, mx) * 0.9),
                          (mx, half_width(hull_key, mx) * 0.9)):
             cv.line((mx, my), (tx_, ty_), rig, 0.07)
         cv.line((mx, -yard), (mx, yard), shade(pal.trim, 1.1), 0.22)
-    cv.circle(mx, my, 0.9, shade(pal.trim, 1.2))
+    if industrial:
+        cv.line((mx - 3, my), (mx + 3, my), shade(pal.trim, 1.4), 0.35)
+        cv.circle(mx, my, 1.3, shade(pal.superstructure, 0.68))
+        cv.circle(mx, my, 0.65, pal.accent)
+    else:
+        cv.circle(mx, my, 0.9, shade(pal.trim, 1.2))
 
     # --- грязь и износ
-    for _ in range(25 if not small else 5):
+    for _ in range(8 if industrial else 25 if not small else 5):
         x = rng.uniform(stern * 0.9, bow * 0.8)
         yy = rng.uniform(-1, 1) * half_width(hull_key, x) * 0.8
         r = rng.uniform(0.3, 1.1)
