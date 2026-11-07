@@ -1,5 +1,7 @@
 import random
 
+import pytest
+
 from pygame.math import Vector2
 
 from nine.combat import try_fire, update_lock, update_projectile
@@ -173,3 +175,52 @@ def test_repair_gel_heals_and_uses_charges():
     assert s.activate(0) is None                          # кулдаун
     run(s, 6)
     assert s.hp > 80 and s.subsystems["engine"] > 0.8
+
+
+def test_layout_balance_is_legacy_compatible():
+    from nine.ship import layout_balance
+
+    for key in ("scout", "corvette", "torpedo_boat", "cruiser", "barge"):
+        hull = HULLS[key]
+        assert layout_balance(hull, hull.default_fit) == (0.0, 0.0, 1.0)
+        assert Ship(key, (0, 0)).layout_turn_factor == 1.0
+
+
+def test_hull_module_placement_affects_handling_without_mandatory_roles():
+    from nine.ship import layout_balance
+
+    hull = HULLS["manta"]
+    asymmetric = list(hull.default_fit)
+    symmetric = list(asymmetric)
+    symmetric[1] = "cannon_m"
+
+    side_a, spread_a, turn_a = layout_balance(hull, asymmetric)
+    side_b, spread_b, turn_b = layout_balance(hull, symmetric)
+    assert abs(side_b) < abs(side_a)
+    assert 0 <= spread_a <= 1 and 0 <= spread_b <= 1
+    assert 0.85 <= turn_a <= 1 and 0.85 <= turn_b <= 1
+    assert turn_a != turn_b
+
+    ship = Ship("manta", (2000, 2000), fit=asymmetric)
+    original = ship.layout_turn_factor
+    ship.set_module(1, "cannon_m")
+    assert ship.layout_turn_factor == turn_b
+    assert ship.layout_turn_factor != original
+
+
+def test_turning_uses_layout_factor_but_not_when_idle():
+    from nine.ship import layout_balance
+
+    ship = Ship("manta", (2000, 2000), fit=HULLS["manta"].default_fit)
+    ship.vel = Vector2(60, 0)
+    ship.angle = 0.0
+    speed_k = 0.35 + 0.65 * min(1, ship.speed / max(1, ship.base_top_speed()))
+    expected = (ship.hull.turn_rate * min(1.15, ship.mass_factor())
+                * ship.layout_turn_factor * speed_k * DT)
+    ship.update(DT, throttle=0, turn=1, boost=False, density=0.0)
+    assert ship.angle == pytest.approx(expected, abs=0.01)
+
+    stopped = Ship("manta", (2000, 2000))
+    stopped.angle = 90
+    stopped.update(DT, throttle=0, turn=0, boost=False, density=0.0)
+    assert stopped.angle == 90

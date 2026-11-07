@@ -425,3 +425,30 @@ def test_engineering_panel_renders_without_modifying_world():
     preview = Ship("bastion", world.port, fit=fit)
     port._engineering_panel(world, pygame.Rect(148, 156, 1032, 470), preview)
     assert (world.captain.credits, list(world.player.fit), world.player.cargo_mass) == before
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_engineering_panel_reports_gameplay_layout_factor(key):
+    from nine.port_ui import engineering_snapshot
+
+    ship = Ship(key, (0, 0))
+    engineering = engineering_snapshot(ship)
+    assert engineering["layout_turn_pct"] == pytest.approx(ship.layout_turn_factor * 100)
+    assert engineering["side_shift"] == pytest.approx(abs(ship.side_balance) * 100)
+    assert engineering["turn"] == pytest.approx(
+        ship.hull.turn_rate * min(1.15, ship.mass_factor()) * ship.layout_turn_factor)
+    assert engineering["layout_turn_pct"] <= 100
+
+
+def test_manta_bilateral_weapon_fit_improves_mass_symmetry():
+    from nine.port_ui import engineering_snapshot
+
+    ship = Ship("manta", (0, 0))
+    new_fit = list(ship.fit)
+    new_fit[1] = "cannon_m"
+    modified = Ship("manta", (0, 0), fit=new_fit)
+    a, b = engineering_snapshot(ship), engineering_snapshot(modified)
+    assert b["side_shift"] < a["side_shift"]
+    assert b["module_mass"] > a["module_mass"]
+    # Better bilateral balance does not guarantee a faster ship: mass matters.
+    assert b["speed"] < a["speed"]

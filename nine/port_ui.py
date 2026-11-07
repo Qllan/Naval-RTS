@@ -104,7 +104,10 @@ def engineering_snapshot(ship, cargo=0.0, *, engine_pips=None):
         "speed": (engine.top_speed * ship.hull.speed_mult * mass_factor * speed_pips
                   if engine else 0.0),
         "accel": (engine.thrust * 100 / total_mass if engine else 0.0),
-        "turn": ship.hull.turn_rate * min(1.15, mass_factor),
+        "turn": ship.hull.turn_rate * min(1.15, mass_factor) * ship.layout_turn_factor,
+        "side_shift": abs(ship.side_balance) * 100.0,
+        "spread": ship.mass_spread * 100.0,
+        "layout_turn_pct": ship.layout_turn_factor * 100.0,
     }
 
 
@@ -120,7 +123,8 @@ def ship_summary(ship, cargo=0.0):
         ("Масса", ship.mass, False),
         ("Скорость", ship.base_top_speed(), True),
         ("Разгон", accel, True),
-        ("Поворот", ship.hull.turn_rate * min(1.15, ship.mass_factor()), True),
+        ("Поворот", ship.hull.turn_rate * min(1.15, ship.mass_factor()) *
+         ship.layout_turn_factor, True),
         ("Энергия (чисто)", ship.power_balance(0.0), True),
         ("Энергия (Пелена)", ship.power_balance(DENSE), True),
         ("Радар (чисто)", ship.radar_range(0.0), True),
@@ -653,20 +657,22 @@ class PortUI:
               cur["design_mass"] * 1.35,
               f"Проектный ориентир {cur['design_mass']:.0f}",
               bad=(nxt["total_mass"] if nxt else cur["total_mass"]) > cur["design_mass"])
+        metric("Бортовой перекос %", "side_shift", y + 179, higher=False)
 
-        section("ЭНЕРГИЯ · ед/с", y + 190)
-        metric("Реактор", "power_output", y + 213)
-        metric("Расход", "upkeep_clear", y + 233, higher=False)
-        metric("Баланс", "balance_clear", y + 253, signed=True)
-        metric("В Пелене", "balance_veil", y + 273, signed=True)
+        section("ЭНЕРГИЯ · ед/с", y + 207)
+        metric("Реактор", "power_output", y + 230)
+        metric("Расход", "upkeep_clear", y + 250, higher=False)
+        metric("Баланс", "balance_clear", y + 270, signed=True)
+        metric("В Пелене", "balance_veil", y + 290, signed=True)
         if (nxt or cur)["balance_veil"] < 0:
-            self.text("! Риск энергодефицита в Пелене", (x, y + 296),
+            self.text("! Риск энергодефицита в Пелене", (x, y + 312),
                       WARN, self.small)
 
-        section("ХОДОВЫЕ · без повреждений", y + 320)
-        metric("Скорость", "speed", y + 344)
-        metric("Разгон", "accel", y + 365)
-        metric("Поворот", "turn", y + 386)
+        section("ХОДОВЫЕ · без повреждений", y + 335)
+        metric("Скорость", "speed", y + 357)
+        metric("Разгон", "accel", y + 378)
+        metric("Поворот", "turn", y + 399)
+        metric("Компоновка %", "layout_turn_pct", y + 420)
 
     def _stats(self, world, x, y, preview=None):
         """Сводка корабля; с `preview` — сравнение «было > станет»."""
