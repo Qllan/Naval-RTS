@@ -25,6 +25,18 @@ TABS = ("Сервис", "Верфь", "Оснащение", "Склад")
 GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
 DENSE = 0.8          # «плотная Пелена» для сравнения характеристик
 
+PORT_LOGICAL_SIZE = (1280, 720)
+
+
+def port_viewport(size):
+    """Undistorted 16:9 port canvas, letterboxed on other screen ratios."""
+    width, height = map(int, size)
+    lw, lh = PORT_LOGICAL_SIZE
+    scale = min(width / lw, height / lh)
+    w, h = round(lw * scale), round(lh * scale)
+    return pygame.Rect((width - w) // 2, (height - h) // 2, w, h)
+
+
 
 
 def schematic_layout_rect(body, row_count, focus=False):
@@ -187,13 +199,32 @@ def ship_summary(ship, cargo=0.0):
 class PortUI:
     def __init__(self, screen, audio=None):
         self.audio = audio
-        self.screen = screen
-        self.w, self.h = screen.get_size()
+        self.display = screen
+        self.viewport = port_viewport(screen.get_size())
+        self.virtual = screen.get_size() != PORT_LOGICAL_SIZE
+        self.screen = pygame.Surface(PORT_LOGICAL_SIZE) if self.virtual else screen
+        self.w, self.h = PORT_LOGICAL_SIZE
         self.art = ShipArt()
-        self.font = pygame.font.Font(None, 22)
-        self.small = pygame.font.Font(None, 18)
-        self.big = pygame.font.Font(None, 32)
+        self.font = ui.Fonts.get(22)
+        self.small = ui.Fonts.get(18)
+        self.big = ui.Fonts.get(32)
         self.reset()
+
+    def to_logical(self, pos):
+        """Map physical mouse coordinates into layout hitboxes."""
+        if not self.virtual:
+            return tuple(pos)
+        if not self.viewport.collidepoint(pos):
+            return (-10000, -10000)
+        return (round((pos[0] - self.viewport.x) * self.w / self.viewport.w),
+                round((pos[1] - self.viewport.y) * self.h / self.viewport.h))
+
+    def to_display(self, pos):
+        """Map a logical rect center to the actual window for pointer input."""
+        if not self.virtual:
+            return tuple(pos)
+        return (round(self.viewport.x + pos[0] * self.viewport.w / self.w),
+                round(self.viewport.y + pos[1] * self.viewport.h / self.h))
 
     def reset(self):
         self.tab = 0
@@ -291,6 +322,12 @@ class PortUI:
 
     def handle_event(self, e, world):
         """Любое событие pygame. Возвращает 'leave', если игрок выходит в море."""
+        if (self.virtual and e.type in (pygame.MOUSEMOTION,
+                pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP) and hasattr(e, "pos")):
+            # Map before hover/drag tests. Letterbox pixels cannot click UI.
+            fields = dict(e.dict)
+            fields["pos"] = self.to_logical(e.pos)
+            e = pygame.event.Event(e.type, fields)
         if e.type == pygame.KEYDOWN:
             if e.key == pygame.K_r:
                 self._service_all(world)
@@ -530,6 +567,13 @@ class PortUI:
         return y
 
     def draw(self, world, dt=1 / 60):
+        if self.virtual:
+            # Keep the ocean behind the port and draw on stable hit geometry.
+            pygame.transform.smoothscale(self.display, PORT_LOGICAL_SIZE,
+                                         self.screen)
+        self.font = ui.Fonts.get(22)
+        self.small = ui.Fonts.get(18)
+        self.big = ui.Fonts.get(32)
         self.age += dt
         self.zones = []
         k = 1 - (1 - min(1.0, self.age / 0.22)) ** 3            # анимация открытия
@@ -589,12 +633,17 @@ class PortUI:
             ui.text(self.screen, msg, (rect.x + 30, rect.bottom - 50), col, 18)
         pygame.draw.line(self.screen, ui.LINE, (rect.x + 16, rect.bottom - 28), (rect.right - 16, rect.bottom - 28))
         x = rect.x + 22
-        for key, label in (("A/D", "вкладки"), ("W/S", "выбор"), ("Enter", "действие"), ("Backspace/ПКМ", "снять"),
-                           ("G", "группа огня"), ("R", "всё починить"), ("P", "продать груз")):
-            r = ui.chip(self.screen, key, (x, rect.bottom - 22), DIM, 14)
-            r = ui.text(self.screen, label, (r.right + 6, rect.bottom - 22), DIM, 15)
+        br = pygame.Rect(rect.right - 150, rect.bottom - 28, 134, 24)
+        for key, label in (("A/D", "вкладки"), ("W/S", "выбор"),
+                           ("Enter", "действие"), ("Backspace", "снять"),
+                           ("R", "починить"), ("P", "продать")):
+            estimated = (ui.text_width(key, 14, True)
+                         + ui.text_width(label, 15) + 32)
+            if x + estimated > br.x - 12:
+                break
+            r = ui.chip(self.screen, key, (x, rect.bottom - 25), DIM, 14)
+            r = ui.text(self.screen, label, (r.right + 6, rect.bottom - 25), DIM, 15)
             x = r.right + 16
-        br = pygame.Rect(rect.right - 150, rect.bottom - 25, 134, 20)
         self._btn(br, "В МОРЕ  ·  Esc", "leave", ACCENT)
         if self.drag and self.drag["active"]:
             m = MODULES[self.drag["key"]]
@@ -603,6 +652,10 @@ class PortUI:
             ui.text(self.screen, m.name, (mx + 26, my + 2), ACCENT, 16, True)
         elif self.hover and self.hover[0] == "pick" and self.picker:
             self._tooltip(world, self.hover[1])
+        if self.virtual:
+            framed = pygame.transform.smoothscale(self.screen,
+                                                  self.viewport.size)
+            self.display.blit(framed, self.viewport.topleft)
 
     def _btn(self, rect, label, name, color=UI, enabled=True):
         rect = pygame.Rect(rect)

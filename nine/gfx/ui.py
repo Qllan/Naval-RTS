@@ -163,7 +163,7 @@ def bar(screen, rect, frac, color, segments=0, back=FAINT, ghost=None):
 def chip(screen, s, pos, color=TEXT, size=15, fill=None, anchor="topleft"):
     """Маленькая метка в рамке: клавиша, статус."""
     w = text_width(s, size, True) + 10
-    h = size - 1
+    h = max(size - 1, Fonts.get(size, True).get_height() + 3)
     r = pygame.Rect(0, 0, w, h)
     setattr(r, anchor, (int(pos[0]), int(pos[1])))
     if fill:

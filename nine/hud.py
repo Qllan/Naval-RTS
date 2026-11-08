@@ -446,11 +446,14 @@ class Hud:
         zc = ui.BAD if dense else ui.WARN if mist else ui.ACCENT
         cx = self.w // 2
         bw = 194
-        band = ui.panel(s, (cx - 163, 6, 326, 49), None, accent=zc)
+        band_w = min(326, max(230, self.w - 696))
+        band = ui.panel(s, (cx - band_w // 2, 6, band_w, 49),
+                        None, accent=zc)
         self.panels.append(band)
-        ui.text(s, zone.upper(), (cx - 146, 12), zc, 20, True)
-        ui.text(s, f"{int(d * 100)}%", (cx + 143, 13), ui.TEXT, 17,
+        ui.text(s, zone.upper(), (band.x + 13, 12), zc, 20, True)
+        ui.text(s, f"{int(d * 100)}%", (band.right - 13, 13), ui.TEXT, 17,
                 True, anchor="topright")
+        bw = min(bw, band.w - 50)
         r = pygame.Rect(cx - bw // 2, 39, bw, 4)
         ui.bar(s, r, d, zc)
         for th in (C.ZONE_MIST, C.ZONE_DENSE):
@@ -698,12 +701,13 @@ class Hud:
         for label, col in chosen:
             # Keep the centre-bottom lane clear of the right arsenal and
             # the left status/log at 960px and other medium resolutions.
-            max_label_width = min(470, max(170, self.w - 710))
+            left_edge, right_edge = 345, self.w - 356
+            max_label_width = min(470, max(160, right_edge - left_edge - 36))
             while ui.text_width(label, 18) > max_label_width and len(label) > 5:
                 label = label[:-2] + "…"
             width = ui.text_width(label, 18) + 24
-            rect = pygame.Rect(0, 0, width, 23)
-            rect.midtop = (self.w // 2, y)
+            rect = pygame.Rect(0, 0, width, max(23, ui.Fonts.get(18, True).get_height() + 5))
+            rect.midtop = ((left_edge + right_edge) // 2, y)
             bg = pygame.Surface(rect.size, pygame.SRCALPHA)
             bg.fill((*ui.PANEL_RGB, 224))
             s.blit(bg, rect)
