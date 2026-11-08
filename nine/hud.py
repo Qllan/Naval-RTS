@@ -317,15 +317,18 @@ class Hud:
             rows.append(("shield", "Щит", p.shield, p.shield_max, ui.C_SHIELD))
         for key, label, v, vmax, col in rows:
             frac = v / vmax if vmax else 0
-            ui.icon(s, key, (x + 6, y + 5), 12, col)
-            ui.bar(s, (x + 18, y + 1, w, 8), frac, col, segments=10, ghost=self._ghosted(key, frac, dt))
+            # Actual words are as important as tint in a glanceable HUD.
+            short = {"hull": "КОРПУС", "armor": "БРОНЯ", "shield": "ЩИТ"}[key]
+            ui.text(s, short, (x + 2, y - 3), ui.DIM, 13, True)
+            ui.bar(s, (x + 70, y + 1, 96, 8), frac, col,
+                   segments=10, ghost=self._ghosted(key, frac, dt))
             ui.text(s, f"{int(max(0, v))}", (box.right - 12, y - 2), ui.TEXT, 16, anchor="topright")
             y += 18
         if p.cap_max:
             bal = p.power_balance(world.density_at(p.pos))
             col = ui.BAD if p.brownout else ui.C_ENERGY
-            ui.icon(s, "reactor", (x + 6, y + 5), 12, col)
-            ui.bar(s, (x + 18, y + 2, w, 6), p.capacitor / p.cap_max, col)
+            ui.text(s, "ЭНЕРГИЯ", (x + 2, y - 3), ui.DIM, 13, True)
+            ui.bar(s, (x + 70, y + 2, 96, 6), p.capacitor / p.cap_max, col)
             ui.text(s, f"{bal:+.1f}/с", (box.right - 12, y - 2), ui.BAD if bal < 0 else ui.DIM, 16,
                     anchor="topright")
             y += 18
@@ -693,7 +696,10 @@ class Hud:
         self.visible_alerts = [text for text, _ in chosen]
         y = self.h - 78 - 25 * (len(chosen) - 1)
         for label, col in chosen:
-            while ui.text_width(label, 18) > min(470, self.w * 0.40) and len(label) > 5:
+            # Keep the centre-bottom lane clear of the right arsenal and
+            # the left status/log at 960px and other medium resolutions.
+            max_label_width = min(470, max(170, self.w - 710))
+            while ui.text_width(label, 18) > max_label_width and len(label) > 5:
                 label = label[:-2] + "…"
             width = ui.text_width(label, 18) + 24
             rect = pygame.Rect(0, 0, width, 23)

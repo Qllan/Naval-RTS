@@ -95,3 +95,35 @@ def test_ux22_gallery_comes_from_actual_hud_and_renderer(tmp_path):
     assert path.exists() and path.stat().st_size > 30000
     image = pygame.image.load(str(path))
     assert image.get_size() == (2616, 1596)
+
+
+
+def test_ux22_health_channels_have_explicit_words_not_only_colors(monkeypatch):
+    world = make_world()
+    screen = pygame.Surface((1280, 720))
+    hud = Hud(screen, world)
+    recorded = []
+    original = ui.text
+
+    def capture(screen, content, pos, *args, **kwargs):
+        recorded.append(str(content))
+        return original(screen, content, pos, *args, **kwargs)
+
+    monkeypatch.setattr(ui, "text", capture)
+    hud._status(world, 1 / 60)
+    assert {"КОРПУС", "БРОНЯ", "ЩИТ", "ЭНЕРГИЯ"}.issubset(set(recorded))
+
+
+def test_ux22_compact_window_keeps_centre_clear_and_pip_clicks():
+    world = make_world()
+    p = world.player
+    p.hp = p.hull.hp * 0.2
+    p.fires = 2
+    screen = pygame.Surface((960, 540))
+    hud = Hud(screen, world)
+    hud.help_until = 0
+    hud.draw(world, False, mouse=(-100, -100))
+    assert hud.focus == "critical"
+    assert len(hud.visible_alerts) <= 2
+    assert not hud.over_ui((480, 260))
+    assert any(action == ("pip", "engines") for _, action in hud.buttons)
