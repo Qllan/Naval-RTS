@@ -47,6 +47,7 @@ class Game:
         self._seen_loss = None
         self._death_timer = 0.0
         self._fps = 60.0
+        self.show_debug = False
         self.played = False         # сохраняем только если действительно играли
         self.tip = None
         self.apply_settings()
@@ -148,6 +149,8 @@ class Game:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 self.running = False
+            elif e.type == pygame.KEYDOWN and e.key == pygame.K_F3:
+                self.show_debug = not self.show_debug
             elif e.type == pygame.KEYDOWN and e.key == pygame.K_F12:
                 path = f"screenshot_{int(time.time())}.png"
                 pygame.image.save(self.screen, path)
@@ -252,10 +255,31 @@ class Game:
             self.tip.draw()
             if self.tip.done:
                 self.tip = None
+        if self.show_debug:
+            self.draw_debug_overlay(dt)
         if self.settings.show_fps:
             self._fps += (1 / max(dt, 1e-3) - self._fps) * 0.05
             ui.text(self.screen, f"{self._fps:3.0f} FPS", (self.screen.get_width() // 2, self.screen.get_height() - 18),
                     ui.DIM, 15, anchor="midtop")
+
+    def draw_debug_overlay(self, dt):
+        """F3: read-only live simulation diagnostics, independent of gameplay controls."""
+        w = self.world
+        p = w.player
+        fps = self.clock.get_fps() or (1.0 / max(dt, 1e-3))
+        lines = (
+            f"DEBUG  FPS {fps:.0f}  frame {dt * 1000:.1f} ms",
+            f"Seed {w.seed}  t {w.t:.1f}s  pos ({p.pos.x:.0f}, {p.pos.y:.0f})",
+            f"Speed {p.speed:.1f}  Veil {w.density_at(p.pos):.2f}",
+            f"Radar {w.radar_range():.0f}  Vision {w.visual_range():.0f}",
+            f"NPC pirates {len(w.pirates)}  rays {len(w.rays)}  tihodonts {len(w.tihodonts)}",
+            f"Objects shots {len(w.projectiles)}  nodes {len(w.nodes)}  loot {len(w.loot)}",
+        )
+        panel = pygame.Surface((540, 22 + 23 * len(lines)), pygame.SRCALPHA)
+        panel.fill((5, 12, 20, 218))
+        self.screen.blit(panel, (12, 12))
+        for i, line in enumerate(lines):
+            ui.text(self.screen, line, (23, 20 + i * 23), ui.DIM, 16)
 
     def _check_loss(self, dt):
         loss = self.world.last_loss
