@@ -12,9 +12,12 @@ import numpy as np
 from pygame.math import Vector2
 
 from .settings import settings_dir
-from .ship import Ship
+from .hulls import HULLS
+from .modules import MODULES
+from .ship import PIP_MAX, PIP_SYSTEMS, PIP_TOTAL, Ship
 
-VERSION = 1
+VERSION = 2
+SUPPORTED_VERSIONS = (1, 2)
 
 
 def save_path():
@@ -36,12 +39,22 @@ def to_dict(world):
         "captain": {"credits": cap.credits, "debt": cap.debt, "trauma": cap.trauma, "cargo": cap.cargo,
                     "storage": cap.storage, "ammo_stock": cap.ammo_stock,
                     "pending_insurance": cap.pending_insurance, "kills": cap.kills},
-        "ship": {"hull": p.hull.key, "fit": p.fit, "groups": {str(k): v for k, v in p.groups.items()},
-                 "pos": [p.pos.x, p.pos.y], "angle": p.angle, "hp": p.hp, "armor": p.armor,
-                 "fouling": p.fouling, "subsystems": p.subsystems,
-                 "ammo": [w.ammo for w in p.weapons], "charges": [u.charges for u in p.utilities]},
+        "ship": {
+            "hull": p.hull.key, "fit": p.fit, "groups": {str(k): v for k, v in p.groups.items()},
+            "pos": [p.pos.x, p.pos.y], "angle": p.angle, "vel": [p.vel.x, p.vel.y],
+            "hp": p.hp, "armor": p.armor, "shield": p.shield, "capacitor": p.capacitor,
+            "fouling": p.fouling, "shield_cd": p.shield_cd,
+            "subsystems": p.subsystems, "pips": dict(p.pips),
+            "fires": p.fires, "leaks": p.leaks, "water": p.water,
+            # Slot-indexed state keeps sparse and different-sized hull layouts stable.
+            "ammo_by_slot": {str(w.index): {"module": w.defn.key, "ammo": w.ammo}
+                             for w in p.weapons},
+            "charges_by_slot": {str(u.index): {"module": u.defn.key, "charges": u.charges}
+                                for u in p.utilities},
+        },
         "in_capsule": world.in_capsule,
         "ammo_type": world.ammo_type,
+        "spotlight": world.spotlight,
         "memory": {"shape": list(mem.shape), "data": base64.b64encode(mem.tobytes()).decode()},
         "marks": {k: {**m, "pos": [m["pos"].x, m["pos"].y]} for k, m in world.marks.items()},
         "waypoint": [world.waypoint.x, world.waypoint.y] if world.waypoint is not None else None,
@@ -50,26 +63,78 @@ def to_dict(world):
     }
 
 
+def _validate_fit(hull_key, fit):
+    """Reject incompatible or partial loadouts before constructing a ship."""
+    hull = HULLS[hull_key]
+    if not isinstance(fit, list) or len(fit) != len(hull.slots):
+        raise ValueError("Неверное число слотов в сохранении")
+    for slot, key in zip(hull.slots, fit):
+        if key is None:
+            continue
+        if not isinstance(key, str) or key not in MODULES:
+            raise ValueError("Неизвестный модуль в сохранении")
+        m = MODULES[key]
+        if m.category != slot.category or m.size > slot.size:
+            raise ValueError("Несовместимый модуль в сохранении")
+
+
+def _restore_slot_state(states, units, legacy, name, maximum):
+    """Version 2 maps state to slot+module; v1 uses arrays in module order."""
+    if isinstance(states, dict):
+        for unit in units:
+            entry = states.get(str(unit.index))
+            if not isinstance(entry, dict) or entry.get("module") != unit.defn.key:
+                continue
+            value = entry.get(name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                setattr(unit, name, max(0, min(maximum(unit), int(value))))
+    else:
+        for unit, value in zip(units, legacy):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                setattr(unit, name, max(0, min(maximum(unit), int(value))))
+
+
 def from_dict(d):
+    if d.get("version") not in SUPPORTED_VERSIONS:
+        raise ValueError("Неподдерживаемая версия сохранения")
     from .world import World
+    s = d["ship"]
+    _validate_fit(s["hull"], s["fit"])
     world = World(d["seed"])
     world.t = d["t"]
     world.clock_offset = d.get("clock_offset", 0.0)
     cap = world.captain
     for k, v in d["captain"].items():
         setattr(cap, k, v)
-    s = d["ship"]
     p = Ship(s["hull"], Vector2(s["pos"]), s["angle"], fit=s["fit"])
-    p.groups.update({int(k): v for k, v in s["groups"].items()})
-    p.hp, p.armor, p.fouling = s["hp"], s["armor"], s["fouling"]
+    weapon_indices = {w.index for w in p.weapons}
+    p.groups.update({int(k): int(v) for k, v in s.get("groups", {}).items()
+                     if int(k) in weapon_indices and type(v) is int and v in (0, 1, 2)})
+    p.hp = max(0.0, min(p.hull.hp, s["hp"]))
+    p.armor = max(0.0, min(p.armor_max, s["armor"]))
+    p.fouling = max(0.0, min(1.0, s["fouling"]))
     p.subsystems.update(s["subsystems"])
-    for w, a in zip(p.weapons, s["ammo"]):
-        w.ammo = a
-    for u, c in zip(p.utilities, s["charges"]):
-        u.charges = c
+    p.shield = max(0.0, min(p.shield_max, s.get("shield", p.shield_max)))
+    p.capacitor = max(0.0, min(p.cap_max, s.get("capacitor", p.cap_max)))
+    p.shield_cd = max(0.0, s.get("shield_cd", 0.0))
+    p.brownout = p.cap_max > 0 and p.capacitor <= 0
+    p.vel = Vector2(s.get("vel", (0, 0)))
+    p.water = max(0.0, min(1.0, s.get("water", 0.0)))
+    p.fires = max(0, min(3, int(s.get("fires", 0))))
+    p.leaks = max(0, min(4, int(s.get("leaks", 0))))
+    pips = s.get("pips")
+    if isinstance(pips, dict) and set(pips) == set(PIP_SYSTEMS):
+        values = [pips[k] for k in PIP_SYSTEMS]
+        if all(type(v) is int and 0 <= v <= PIP_MAX for v in values) and sum(values) == PIP_TOTAL:
+            p.pips = dict(pips)
+    _restore_slot_state(s.get("ammo_by_slot"), p.weapons, s.get("ammo", ()),
+                        "ammo", lambda w: w.defn.ammo)
+    _restore_slot_state(s.get("charges_by_slot"), p.utilities, s.get("charges", ()),
+                        "charges", lambda u: u.defn.charges)
     world.player = p
     world.in_capsule = d["in_capsule"]
     world.ammo_type = d.get("ammo_type", "std")
+    world.spotlight = bool(d.get("spotlight", False))
     m = d["memory"]
     mem = np.frombuffer(base64.b64decode(m["data"]), np.uint8).reshape(m["shape"])
     if mem.shape == world.memory.shape:
@@ -96,8 +161,8 @@ def load():
     try:
         with open(save_path(), encoding="utf-8") as f:
             d = json.load(f)
-        if d.get("version") != VERSION:
+        if d.get("version") not in SUPPORTED_VERSIONS:
             return None
         return from_dict(d)
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
         return None
