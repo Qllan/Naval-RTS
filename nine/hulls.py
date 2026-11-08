@@ -202,48 +202,55 @@ _ALL = [
              "и вспомогательным оборудованием.",
     ),
     HullDef(
-        "bastion", "B-31 «Оплот»", "Жёсткая броневая платформа, четыре оружейных узла",
-        hp=280, mass=185, speed_mult=0.82, turn_rate=76, cargo=42, radius=30, price=2500,
-        shape=((35, 0), (27, 8), (13, 13), (-23, 14), (-34, 8), (-36, 0),
-               (-34, -8), (-23, -14), (13, -13), (27, -8)),
-        slots=(Slot("weapon", M, (19, 0), 0, 265),
-               Slot("weapon", M, (-22, 0), 180, 265),
-               Slot("weapon", S, (0, -11), -90, 180),
-               Slot("weapon", S, (0, 11), 90, 180))
+        "bastion", "B-31 «Оплот»", "Длинный линейный корпус с усиленной цитаделью",
+        hp=340, mass=230, speed_mult=0.76, turn_rate=62, cargo=42, radius=58, price=3000,
+        # Ровно 114 единиц по оси корабля и 24 по ширине (4.75:1).
+        # radius = 58 нужен только для широкого поиска; точное попадание
+        # в этот длинный корабль рассчитывается по повернутому контуру.
+        shape=((58, 0), (53, 2), (45, 5.2), (34, 8.2), (20, 10.3),
+               (6, 11.6), (-17, 12), (-34, 11.3), (-46, 8.2), (-53, 4), (-56, 0),
+               (-53, -4), (-46, -8.2), (-34, -11.3), (-17, -12), (6, -11.6),
+               (20, -10.3), (34, -8.2), (45, -5.2), (53, -2)),
+        slots=(Slot("weapon", M, (35, 0), 0, 265),
+               Slot("weapon", M, (-30, 0), 180, 265),
+               Slot("weapon", S, (-4, -8.5), -90, 180),
+               Slot("weapon", S, (-4, 8.5), 90, 180))
         + _core(M, M, M, M, M, diagram_positions=(
-            (-30, 0), (-17, 0), (-4, 0), (13, 0), (27, 0)))
-        + (Slot("utility", S, diagram_pos=(-10, -9)),
-           Slot("utility", S, diagram_pos=(-10, 9))),
+            (-46, 0), (-33, 0), (-11, 0), (14, 0), (45, 0)))
+        + (Slot("utility", S, diagram_pos=(4, -6.2)),
+           Slot("utility", S, diagram_pos=(4, 6.2))),
         default_fit=("cannon_m", "cannon_m", "autocannon_s", "autocannon_s",
                      "engine_m", "reactor_m", "shield_m", "armor_m", "sensor_s",
                      None, None),
         series="Конструкторское бюро «Рубеж»", visual_style="industrial_sci_fi",
         visual=HullVisual(
-            # Only artwork changes: gameplay shape, radius and gun slots stay
-            # intact. The maximum half-beam is now 12.5 instead of 14 (-10.7%).
-            # A longer bow taper and narrower stern read as a heavy warship
-            # rather than a rectangular armored cargo platform.
-            render_profile=((35, 0), (31, 2.4), (26, 6.4), (17, 9.95),
-                            (10, 11.8), (-9, 12.4), (-21, 12.5),
-                            (-28, 9.6), (-33, 5.6), (-36, 0)),
-            superstructures=((-5, 0, 16, 8.6, True),
-                             (-17, 0, 7, 6.6, False),
-                             (7, 0, 8, 6.4, False)),
-            mast=(-5, 0), deck_ribs=(-30, -20, -10, 0, 10, 20, 30),
-            deck_strips=(0.38, 0.72),
+            # New capital-hull art matches the long physical envelope.
+            # The central deck is slender; weight reads from axial
+            # battery stations, side armor and a layered compact citadel.
+            render_profile=((58, 0), (54, 1.45), (49, 3.6), (44, 5.8),
+                            (36, 7.7), (23, 9.6), (7, 11.15), (-17, 11.5),
+                            (-32, 10.6), (-43, 8.4), (-51, 4.8), (-56, 0)),
+            superstructures=((-7, 0, 17, 7.8, True),
+                             (-19, 0, 8, 6, False),
+                             (16, 0, 8, 5.4, False)),
+            mast=(-7, 0),
+            deck_ribs=(-47, -37, -25, -13, 0, 13, 25, 39, 48),
+            deck_strips=(0.28, 0.62),
             details=(
-                DeckDetail("spine_channel", (0, 0), (36, 2.8)),
-                DeckDetail("shoulder_guard", (-9, -10.65), (14, 1.6)),
-                DeckDetail("shoulder_guard", (-9, 10.65), (14, 1.6)),
-                DeckDetail("armor_plate", (10, -8.5), (9, 4)),
-                DeckDetail("armor_plate", (10, 8.5), (9, 4)),
-                DeckDetail("armor_plate", (-10, -8.5), (9, 4)),
-                DeckDetail("armor_plate", (-10, 8.5), (9, 4)),
-                DeckDetail("service_hatch", (27, 0), (3.8, 3.2)),
-                DeckDetail("radiator", (-30, 0), (6, 4)),
+                DeckDetail("spine_channel", (0, 0), (57, 2.2)),
+                DeckDetail("shoulder_guard", (-10, -9.8), (22, 1.4)),
+                DeckDetail("shoulder_guard", (-10, 9.8), (22, 1.4)),
+                DeckDetail("armor_plate", (24, -7.4), (8, 3.0)),
+                DeckDetail("armor_plate", (24, 7.4), (8, 3.0)),
+                DeckDetail("armor_plate", (-23, -8.3), (11, 3.0)),
+                DeckDetail("armor_plate", (-23, 8.3), (11, 3.0)),
+                DeckDetail("armor_plate", (-37, -7.4), (9, 2.2)),
+                DeckDetail("armor_plate", (-37, 7.4), (9, 2.2)),
+                DeckDetail("service_hatch", (44, 0), (4.2, 3.0)),
+                DeckDetail("radiator", (-47, 0), (8, 3.2)),
             )),
-        desc="Тяжёлая силовая рама с разнесёнными башнями. Оружие и защиту "
-             "можно заменить поддерживающими системами.",
+        desc="Длинный узкий линейный корабль: две главные осевые батареи и "
+             "две вторичные бортовые установки. Огневая роль задаётся оснащением.",
     ),
     # --- только для NPC и особых случаев ---------------------------------
     HullDef(

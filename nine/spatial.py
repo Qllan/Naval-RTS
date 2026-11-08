@@ -43,14 +43,53 @@ class ShipCollisionGrid:
         return None
 
 
+def _point_in_hull_or_margin(shape, x, y, padding):
+    """Point in local hull polygon or within padding of any edge.
+
+    This avoids a huge circular damage zone around a long, narrow ship.
+    The winding test handles concave outlines, while the segment check
+    includes the projectile's small extra collision margin.
+    """
+    inside = False
+    pad2 = padding * padding
+    for a, b in zip(shape, shape[1:] + shape[:1]):
+        ax, ay = a
+        bx, by = b
+        if (ay > y) != (by > y):
+            cross_x = ax + (y - ay) * (bx - ax) / (by - ay)
+            if x < cross_x:
+                inside = not inside
+        dx, dy = bx - ax, by - ay
+        edge_sq = dx * dx + dy * dy
+        if edge_sq:
+            t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / edge_sq))
+            cx, cy = ax + t * dx, ay + t * dy
+            distance_sq = (x - cx) ** 2 + (y - cy) ** 2
+            if distance_sq <= pad2:
+                return True
+    return inside
+
+
 def ship_overlaps(ship, pos, padding=0.0):
-    """Match the old strict circle collision (< radius), without sqrt."""
+    """Strictly preserve circle hits for legacy hulls.
+
+    The redesigned B-31 uses its rotated, long and narrow collision
+    polygon. Its radius remains a conservative broad-phase bound.
+    """
     if not ship.alive:
         return False
-    dx = ship.pos.x - pos.x
-    dy = ship.pos.y - pos.y
+    dx = pos.x - ship.pos.x
+    dy = pos.y - ship.pos.y
     radius = ship.radius + padding
-    return dx * dx + dy * dy < radius * radius
+    if dx * dx + dy * dy >= radius * radius:
+        return False
+    if ship.hull.key != "bastion":
+        return True
+    import math
+    angle = math.radians(ship.angle)
+    cs, sn = math.cos(angle), math.sin(angle)
+    lx, ly = dx * cs + dy * sn, -dx * sn + dy * cs
+    return _point_in_hull_or_margin(ship.hull.shape, lx, ly, padding)
 
 
 

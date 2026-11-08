@@ -85,20 +85,37 @@ def island_at(islands, pos, pad=0.0):
 
 
 def collide_ship(ship, islands, rng):
-    """Выталкивает корабль на воду. Возвращает скорость удара (0 — не было столкновения)."""
+    """Выталкивает корабль на воду. Возвращает скорость удара (0 — не было столкновения).
+
+    The B-31's length would make a radius-58 island collision disk
+    wildly oversized at the sides. Model its keel with overlapping
+    probes instead; other hulls retain their original circle logic.
+    """
     for isl in islands:
-        hit = isl.push_out(ship.pos, ship.radius * 0.8)
+        if ship.hull.key == "bastion":
+            forward = Vector2(1, 0).rotate(ship.angle)
+            # 9 circles along the keel, radius 11.5, encompass the
+            # 114x24 hull without turning the whole ship into a disk.
+            hit = None
+            for offset in (50, 38, 26, 14, 0, -14, -26, -38, -50):
+                local_offset = forward * offset
+                contact = isl.push_out(ship.pos + local_offset, 11.5)
+                if contact is not None:
+                    new_probe_pos, normal = contact
+                    hit = new_probe_pos - local_offset, normal
+                    break
+        else:
+            hit = isl.push_out(ship.pos, ship.radius * 0.8)
         if hit is None:
             continue
         new_pos, normal = hit
         ship.pos.update(new_pos)
         vn = ship.vel.dot(normal)
         if vn < 0:
-            ship.vel -= normal * vn * 1.4          # отскок
+            ship.vel -= normal * vn * 1.4
             ship.vel *= 0.6
             impact = -vn
             if impact > AGROUND_MIN_SPEED:
-                # удар о скалы — ниже ватерлинии, щиты не помогают
                 ship.apply_damage((impact - AGROUND_MIN_SPEED) * AGROUND_DAMAGE, "torpedo", rng)
             return impact
     return 0.0

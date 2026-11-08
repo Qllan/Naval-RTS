@@ -487,7 +487,11 @@ def _static_modules(cv, hull_key, pal, static_modules, bow, stern, half_w):
             for side in (-1, 1):
                 x = stern * 0.8
                 while x < bow * 0.55:
-                    cv.rect(x + 1.4, side * (half_w + 0.35), 2.6, th, pal.armor, radius=0.15)
+                    local_width = (half_width(hull_key, x + 1.4)
+                                   if HULLS[hull_key].visual is not None else half_w)
+                    if local_width > 0.8:
+                        cv.rect(x + 1.4, side * (local_width * 0.85), 2.6, th,
+                                pal.armor, radius=0.15)
                     x += 3.2
         elif cat == "engine":
             n = 1 if m.size == 1 else 2

@@ -554,8 +554,10 @@ def test_r11_visual_profile_is_separate_from_gameplay_geometry(key):
                    (-30, 0), (-28, -2), (-17, -5), (4, -5), (20, -3)),
         "manta": ((27, 0), (17, 9), (5, 14), (-18, 13), (-28, 7),
                   (-29, 0), (-28, -7), (-18, -13), (5, -14), (17, -9)),
-        "bastion": ((35, 0), (27, 8), (13, 13), (-23, 14), (-34, 8),
-                    (-36, 0), (-34, -8), (-23, -14), (13, -13), (27, -8)),
+        "bastion": ((58, 0), (53, 2), (45, 5.2), (34, 8.2), (20, 10.3),
+                    (6, 11.6), (-17, 12), (-34, 11.3), (-46, 8.2), (-53, 4), (-56, 0),
+                    (-53, -4), (-46, -8.2), (-34, -11.3), (-17, -12), (6, -11.6),
+                    (20, -10.3), (34, -8.2), (45, -5.2), (53, -2)),
     }[key]
     for slot in hull.slots:
         if slot.category == "weapon":
@@ -632,32 +634,40 @@ def test_r11_equipment_turret_respects_hull_material_without_recoloring_legacy()
     assert "cannon_m" in Ship("manta", (0, 0)).fit
 
 
-def test_bastion_r112_has_narrower_illustrated_beam_and_tapered_ends():
+def test_bastion_r113_is_real_long_narrow_capital_hull():
     from nine.gfx.ship_art import PROFILES, half_width
 
-    new_profile = PROFILES["bastion"]
-    peak_half_beam = max(width for _, width in new_profile)
-    assert peak_half_beam == pytest.approx(12.5)
-    assert (14 - peak_half_beam) / 14 == pytest.approx(0.107142857, abs=1e-5)
-    assert half_width("bastion", -33) < 6
-    assert half_width("bastion", 26) < 7
-    assert half_width("bastion", -20) > half_width("bastion", 17)
+    hull = HULLS["bastion"]
+    xs = [x for x, _ in hull.shape]
+    ys = [y for _, y in hull.shape]
+    assert max(xs) - min(xs) == 114
+    assert max(ys) - min(ys) == 24
+    assert (max(xs) - min(xs)) / (max(ys) - min(ys)) == pytest.approx(4.75)
+    assert max(y for _, y in PROFILES["bastion"]) == 11.5
+    assert half_width("bastion", 49) < half_width("bastion", 0)
+    assert half_width("bastion", -51) < half_width("bastion", -10)
+    assert max(xs) - min(xs) > 1.9 * (max(x for x, _ in HULLS["manta"].shape)
+                                    - min(x for x, _ in HULLS["manta"].shape))
 
 
-def test_bastion_r112_keeps_original_physics_mounts_and_module_fit():
-    bastion = HULLS["bastion"]
-    assert bastion.shape == ((35, 0), (27, 8), (13, 13), (-23, 14),
-                             (-34, 8), (-36, 0), (-34, -8),
-                             (-23, -14), (13, -13), (27, -8))
-    assert bastion.radius == 30
-    assert (bastion.hp, bastion.mass, bastion.speed_mult, bastion.turn_rate) == (280, 185, 0.82, 76)
-    assert [slot.pos for slot in bastion.slots if slot.category == "weapon"] == [
-        (19, 0), (-22, 0), (0, -11), (0, 11)]
-    assert len(bastion.default_fit) == len(bastion.slots)
-    assert fit_problems(bastion, bastion.default_fit) == []
+def test_bastion_r113_relocated_mounts_stay_inside_new_body():
+    from nine.gfx.ship_art import half_width
+
+    hull = HULLS["bastion"]
+    assert hull.radius == 58
+    assert (hull.hp, hull.mass, hull.speed_mult, hull.turn_rate) == (340, 230, 0.76, 62)
+    assert [slot.pos for slot in hull.slots if slot.category == "weapon"] == [
+        (35, 0), (-30, 0), (-4, -8.5), (-4, 8.5)]
+    assert len(hull.default_fit) == len(hull.slots)
+    assert fit_problems(hull, hull.default_fit) == []
+    for slot in hull.slots:
+        pos = slot.pos if slot.category == "weapon" else slot.diagram_pos
+        if pos is None:
+            continue
+        assert abs(pos[1]) <= half_width("bastion", pos[0]) + 0.1
 
 
-def test_bastion_r112_armor_stays_inside_tapered_visual_body():
+def test_bastion_r113_deck_details_fit_narrow_art_outline():
     from nine.gfx.ship_art import half_width
 
     visual = HULLS["bastion"].visual
@@ -680,3 +690,35 @@ def test_bastion_r112_before_after_preview_restores_catalog_state(tmp_path):
     assert dest.exists() and dest.stat().st_size > 1000
     assert HULLS["bastion"] is hull_before
     assert tuple(PROFILES["bastion"]) == profile_before
+
+
+def test_bastion_r113_projectile_hit_matches_rotated_hull_not_huge_disk():
+    from pygame.math import Vector2
+    from nine.spatial import ship_overlaps, ShipCollisionGrid
+
+    ship = Ship("bastion", (500, 500), 0)
+    assert ship_overlaps(ship, Vector2(540, 500))
+    assert not ship_overlaps(ship, Vector2(500, 540))
+    assert ship_overlaps(ship, Vector2(500, 513), padding=4)
+    ship.angle = 90
+    assert ship_overlaps(ship, Vector2(500, 540))
+    assert not ship_overlaps(ship, Vector2(540, 500))
+    grid = ShipCollisionGrid([ship])
+    assert grid.first_hit(Vector2(500, 540)) is ship
+    assert grid.first_hit(Vector2(540, 500)) is None
+
+
+def test_bastion_r113_keel_island_collision_without_phantom_side_contact():
+    import random
+    from pygame.math import Vector2
+    from nine.islands import Island, collide_ship
+
+    bastion = Ship("bastion", (500, 500), 0)
+    off_side = Island(Vector2(500, 540), 6, 0)
+    assert collide_ship(bastion, [off_side], random.Random(1)) == 0
+    assert bastion.pos == Vector2(500, 500)
+    bow_rock = Island(Vector2(552, 500), 8, 0)
+    bastion.vel = Vector2(70, 0)
+    impact = collide_ship(bastion, [bow_rock], random.Random(1))
+    assert impact > 0
+    assert bastion.pos.x < 500
