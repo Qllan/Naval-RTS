@@ -122,5 +122,5 @@ def test_guild_order_visible_in_journal_and_board():
     ui.tab = TABS.index("Контракты")
     ui.sel = 5
     ui.draw(w, 0.5)
-    assert len([v for v in ui.zones if v[1] == "row"]) == 6
+    assert len([v for v in ui.zones if v[1] == "row"]) == 7
     assert w.contracts["guild"]["status"] == "active"
