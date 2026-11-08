@@ -132,8 +132,9 @@ def test_hud_compact_zone_is_separate_from_status_and_minimap(size):
     hud.help_until = 0
     hud.draw(world, False, mouse=(-100, -100))
     status = hud.panels[0]
-    zone = next(r for r in hud.panels
-                if r.y == 6 and r.h == 49)
+    # HUD widgets are physically scaled on high-resolution displays.
+    # Draw order: status, zone, minimap, arsenal.
+    zone = hud.panels[1]
     assert status.right < zone.left, (status, zone)
     if hud.minimap_rect is not None:
         assert zone.right < hud.minimap_rect.left
@@ -177,12 +178,14 @@ def test_large_window_hud_scales_its_entire_ui_and_click_zones(size):
 def test_hud_large_text_and_colorblind_controls_keep_real_hitboxes():
     screen, world = staged((1600, 900), hull="bastion")
     try:
+        ui.configure(large_font=False, colorblind=False)
+        normal_height = ui.Fonts.get(18).get_height()
         ui.configure(large_font=True, colorblind=True)
         hud = Hud(screen, world)
         hud.help_until = 0
         hud.draw(world, False, mouse=(-100, -100))
         assert hud.virtual
-        assert ui.Fonts.get(18).get_height() >= 16
+        assert ui.Fonts.get(18).get_height() > normal_height
         assert ui.BAD == (240, 120, 30)
         assert hud.action_at(next(r.center for r, action in hud.buttons
                                   if action == ("pip", "engines"))) == ("pip", "engines")
