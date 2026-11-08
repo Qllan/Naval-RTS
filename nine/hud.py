@@ -13,6 +13,7 @@ from pygame.math import Vector2
 from . import config as C
 from .entities import RESOURCES
 from .gfx import ui
+from .gfx.style_tokens import rgb
 from .gfx.ship_art import MAST, outline
 from .modules import AMMO, SIZE_NAME
 from .ship import PIP_MAX, PIP_SYSTEMS, SUBSYSTEMS
@@ -87,10 +88,13 @@ class Hud:
         for y in range(n):
             for x in range(n):
                 d = world.veil.static_density(x / n * C.WORLD_W, y / n * C.WORLD_H)
-                surf.set_at((x, y), (int(6 + 70 * d), int(12 + 14 * d), int(20 + 90 * d)))
+                # Dark steel and cold teal, matching the world Veil instead
+                # of the obsolete purple minimap. Contrast stays conservative.
+                sea, mist = rgb("water_deep"), rgb("veil_mist")
+                surf.set_at((x, y), P_mix(sea, mist, min(0.46, d * 0.46)))
         for i in range(0, n, n // 8):
-            pygame.draw.line(surf, (22, 34, 44), (i, 0), (i, n))
-            pygame.draw.line(surf, (22, 34, 44), (0, i), (n, i))
+            pygame.draw.line(surf, ui.FAINT, (i, 0), (i, n))
+            pygame.draw.line(surf, ui.FAINT, (0, i), (n, i))
         for isl in world.islands:
             pts = []
             for k in range(24):
@@ -399,6 +403,9 @@ class Hud:
         zone = world.veil.zone(p.pos, d)
         zc = ui.ACCENT if d < C.ZONE_MIST else ui.WARN if d < C.ZONE_DENSE else ui.BAD
         cx = self.w // 2
+        # Thin backing plate secures legibility on bright water or in fog.
+        band = pygame.Rect(cx - 205, 5, 410, 67)
+        ui.panel(s, band, accent=ui.LINE)
         ui.text(s, zone.upper(), (cx, 12), zc, 26, True, anchor="midtop")
         bw = 240
         r = pygame.Rect(cx - bw // 2, 40, bw, 5)
@@ -437,7 +444,7 @@ class Hud:
         s.blit(self._fog, (x0, y0))
         if world.veil.in_dead_zone(world.player.pos):
             veil = pygame.Surface((n, n), pygame.SRCALPHA)
-            veil.fill((10, 4, 16, 200))
+            veil.fill((*rgb("ui_bg"), 218))
             s.blit(veil, (x0, y0))
             ui.text(s, "НЕТ СВЯЗИ", (x0 + n // 2, y0 + n // 2), ui.BAD, 24, True, anchor="center")
             return
@@ -464,7 +471,8 @@ class Hud:
                                                      wp + Vector2(-4, 0)])
         pygame.draw.circle(s, ui.ACCENT, m(world.port), 4, 1)
         pygame.draw.circle(s, (240, 240, 250), m(world.eye), 3)
-        pygame.draw.circle(s, (140, 90, 190), m(world.eye), int(C.EYE_WALL_R / C.WORLD_W * n), 1)
+        pygame.draw.circle(s, rgb("veil_fringe"), m(world.eye),
+                           int(C.EYE_WALL_R / C.WORLD_W * n), 1)
         ui.text(s, "Око", (m(world.eye)[0] - 8, m(world.eye)[1] + 6), ui.DIM, 14, anchor="topright")
         ui.text(s, "Порт", (m(world.port)[0] + 7, m(world.port)[1] - 6), ui.DIM, 14)
         p = world.player

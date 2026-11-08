@@ -457,10 +457,15 @@ class PortUI:
         dim = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
         dim.fill((0, 0, 0, int(110 * k)))
         self.screen.blit(dim, (0, 0))
-        ui.panel(self.screen, rect, None, ACCENT, bg=(5, 9, 14, 236))
+        ui.panel(self.screen, rect, None, ACCENT, bg=(*ui.PANEL_RGB, 245))
+        # Fixed top/bottom plates, under existing controls and labels.
+        pygame.draw.rect(self.screen, ui.FAINT, (rect.x + 1, rect.y + 1, rect.w - 2, 60))
+        pygame.draw.line(self.screen, ui.LINE, (rect.x + 17, rect.y + 60),
+                         (rect.right - 17, rect.y + 60), 1)
 
-        ui.text(self.screen, "ПОРТ БЕЖЕНЦЕВ", (rect.x + 22, rect.y + 16), ACCENT, 30, True)
-        ui.text(self.screen, "нейтральный хаб · Гильдия «Горизонт»", (rect.x + 24, rect.y + 44), DIM, 15)
+        ui.text(self.screen, "ПОРТ БЕЖЕНЦЕВ", (rect.x + 22, rect.y + 15), UI, 30, True)
+        ui.text(self.screen, "НЕЙТРАЛЬНЫЙ ТЕХНИЧЕСКИЙ УЗЕЛ  /  ГИЛЬДИЯ «ГОРИЗОНТ»",
+                (rect.x + 24, rect.y + 44), DIM, 15)
         cap = world.captain
         ui.icon(self.screen, "credits", (rect.right - 190, rect.y + 27), 16, ui.C_ENERGY)
         ui.text(self.screen, f"{cap.credits} КК", (rect.right - 176, rect.y + 18), UI, 22, True)
@@ -478,7 +483,8 @@ class PortUI:
                 pygame.draw.rect(self.screen, ui.FAINT, tr, 1)
             if active:
                 pygame.draw.rect(self.screen, ui.SEL_BG, tr)
-                pygame.draw.line(self.screen, ACCENT, tr.bottomleft, tr.bottomright, 2)
+                pygame.draw.rect(self.screen, ui.LINE, tr, 1)
+                pygame.draw.line(self.screen, ACCENT, tr.bottomleft, tr.bottomright, 3)
             ui.icon(self.screen, TAB_ICON[i], (tr.x + 14, tr.centery), 13, col)
             ui.text(self.screen, name.upper(), (tr.x + 26, tr.centery), col, 17, True, anchor="midleft")
             x = tr.right + 6
@@ -521,9 +527,9 @@ class PortUI:
         rect = pygame.Rect(rect)
         self.zones.append((rect, "button", name))
         hot = rect.collidepoint(self.mouse)
-        if hot:
+        if hot and enabled:
             pygame.draw.rect(self.screen, ui.SEL_BG, rect)
-        pygame.draw.rect(self.screen, color if enabled else ui.FAINT, rect, 1)
+        pygame.draw.rect(self.screen, color if enabled else ui.LINE, rect, 2 if hot and enabled else 1)
         ui.text(self.screen, label, rect.center, (color if hot else UI) if enabled else DIM, 15, True, anchor="center")
 
     def _quick_bar(self, world, rect):
@@ -583,7 +589,7 @@ class PortUI:
         r = pygame.Rect(mx + 18, my + 12, w, h)
         r.right = min(r.right, self.w - 4)
         r.bottom = min(r.bottom, self.h - 4)
-        ui.panel(self.screen, r, None, ACCENT, bg=(8, 14, 20, 245))
+        ui.panel(self.screen, r, None, ACCENT, bg=(*ui.PANEL_RGB, 247))
         ui.text(self.screen, m.name, (r.x + 12, r.y + 8), UI, 17, True)
         ui.text(self.screen, head, (r.x + 12, r.y + 27), DIM, 15)
         for i, (t, col) in enumerate(lines):
@@ -615,18 +621,18 @@ class PortUI:
     def _engineering_panel(self, world, body, preview=None):
         """Инженерный баланс, без закрытия списка модулей и сравнения fitting."""
         panel = pygame.Rect(body.right - 279, body.y, 274, body.h - 6)
-        pygame.draw.rect(self.screen, (11, 24, 32), panel)
-        pygame.draw.rect(self.screen, ui.LINE, panel, 1)
+        ui.panel(self.screen, panel, accent=ui.LINE,
+                 bg=(*ui.PANEL_RGB, 244))
         x, y = panel.x + 11, panel.y + 10
-        self.text("ИНЖЕНЕРНЫЙ БАЛАНС", (x, y), ACCENT, self.small)
+        self.text("ИНЖЕНЕРНЫЙ БАЛАНС", (x, y), UI, self.small)
+        pygame.draw.line(self.screen, ACCENT, (x, y + 19),
+                         (panel.right - 11, y + 19), 1)
         cur = engineering_snapshot(world.player, world.cargo_used)
         nxt = (engineering_snapshot(preview, world.cargo_used,
                                     engine_pips=world.player.pips["engines"])
                if preview is not None else None)
 
-        if nxt is not None:
-            pass  # Разница показана стрелками рядом с изменившимися значениями
-
+        # Differences are shown inline next to each metric when preview exists.
         selected = preview if preview is not None else world.player
         notices = engineering_notices(selected, world.cargo_used, DENSE)
         if notices:
@@ -636,8 +642,9 @@ class PortUI:
             self.text("Проектные характеристики", (x, y + 22), DIM, self.small)
 
         def section(title, yy):
-            pygame.draw.line(self.screen, ui.LINE, (x, yy + 17), (panel.right - 11, yy + 17))
-            self.text(title, (x, yy), DIM, self.small)
+            pygame.draw.line(self.screen, ui.LINE, (x, yy + 17),
+                             (panel.right - 11, yy + 17))
+            self.text(title, (x, yy), UI, self.small)
 
         def metric(label, key, yy, *, higher=True, signed=False, decimals=0):
             value = cur[key]
@@ -656,7 +663,7 @@ class PortUI:
         def meter(yy, amount, capacity, label, *, bad=False):
             self.text(label, (x, yy - 2), DIM, self.small)
             bar = pygame.Rect(x, yy + 16, panel.w - 24, 8)
-            pygame.draw.rect(self.screen, (39, 56, 63), bar)
+            pygame.draw.rect(self.screen, ui.FAINT, bar)
             if capacity > 0:
                 ratio = max(0.0, min(1.0, amount / capacity))
                 filled = pygame.Rect(bar.x, bar.y, round(bar.w * ratio), bar.h)
@@ -748,7 +755,8 @@ class PortUI:
         # Витрина сохраняет достаточную высоту независимо от размера каталога.
         top = y_footer + 26
         show = pygame.Rect(body.x - 8, top, 360, max(95, body.bottom - top))
-        ui.panel(self.screen, show, "Витрина", ui.LINE, bg=(8, 18, 28, 255))
+        ui.panel(self.screen, show, "ВИТРИНА / КОРПУС", ui.LINE,
+                 bg=(*ui.PANEL_RGB, 255))
         self._showcase(Ship(h.key, (0, 0), -90), show, world.t)
         x, y = body.x + 390, body.y
         self.text(h.name, (x, y), ACCENT, self.big)
@@ -788,10 +796,10 @@ class PortUI:
         rect = schematic_layout_rect(body, row_count, focus=focus)
         if rect.h < 105:
             return
-        pygame.draw.rect(self.screen, (12, 25, 34), rect)
-        pygame.draw.rect(self.screen, ui.LINE, rect, 1)
+        ui.panel(self.screen, rect, accent=ui.LINE,
+                 bg=(*ui.PANEL_RGB, 247))
         self.text("ИНЖЕНЕРНЫЙ ЧЕРТЁЖ · НОС ВВЕРХ" if focus else
-                  "СХЕМА КОРПУСА · НОС ВВЕРХ", (rect.x + 10, rect.y + 5), DIM, self.small)
+                  "СХЕМА КОРПУСА · НОС ВВЕРХ", (rect.x + 10, rect.y + 5), UI, self.small)
 
         shape = ship.hull.shape
         max_x = max(abs(x) for x, _ in shape)
@@ -807,7 +815,7 @@ class PortUI:
             return (round(cx + y * scale), round(cy - x * scale))
 
         points = [screen_pos(x, y) for x, y in shape]
-        pygame.draw.polygon(self.screen, (32, 49, 57), points)
+        pygame.draw.polygon(self.screen, ui.SEL_BG, points)
         pygame.draw.polygon(self.screen, ui.LINE, points, 2)
         pygame.draw.line(self.screen, ui.FAINT, screen_pos(-max_x * 0.8, 0),
                          screen_pos(max_x * 0.8, 0), 1)
@@ -853,8 +861,9 @@ class PortUI:
                 selected = index == selected_index
                 filled = current_fit[index] is not None
                 color = ACCENT if selected else ui.GOOD if filled else DIM
-                pygame.draw.rect(self.screen, ui.SEL_BG if selected else (14, 31, 39), card)
-                pygame.draw.rect(self.screen, color, card, 1)
+                pygame.draw.rect(self.screen, ui.SEL_BG if selected else ui.PANEL_RGB, card)
+                pygame.draw.rect(self.screen, color if selected else ui.LINE, card,
+                                 2 if selected else 1)
                 label = f"{index + 1:02d} {abbreviations.get(slot.category, '??')} {SIZE_NAME[slot.size]}"
                 self.text(label, (card.x + 7, card.y + 2), color, self.small)
                 self.zones.append((card, "slot", index))

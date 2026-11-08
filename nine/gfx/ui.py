@@ -5,22 +5,29 @@ import math
 import pygame
 from pygame.math import Vector2
 
-TEXT = (192, 206, 212)
-DIM = (100, 116, 124)
-FAINT = (40, 52, 60)
-LINE = (44, 62, 72)
-ACCENT = (80, 205, 190)
-WARN = (242, 162, 80)
-BAD = (236, 86, 70)
-GOOD = (120, 212, 130)
-PANEL_BG = (5, 9, 14, 205)
-SEL_BG = (18, 44, 52)
+from .style_tokens import rgb
 
-C_HULL = (212, 96, 76)
-C_ARMOR = (190, 170, 120)
-C_SHIELD = (90, 170, 240)
-C_ENERGY = (236, 212, 96)
-C_FOUL = (170, 100, 220)
+# R1.4 — same industrial control-room tokens across HUD, port and menus.
+# Secondary text deliberately keeps AA contrast on opaque ui_bg/ui_panel.
+TEXT = rgb("ui_text")
+DIM = rgb("ui_muted")
+FAINT = rgb("ui_raised")
+LINE = rgb("ui_line")
+ACCENT = rgb("ui_focus")
+WARN = rgb("ui_warning")
+BAD = rgb("ui_error")
+GOOD = rgb("ui_good")
+PANEL_RGB = rgb("ui_panel")
+PANEL_BG = (*PANEL_RGB, 224)
+SEL_BG = rgb("ui_raised")
+
+# Functional channel colors are stable across screens and independent
+# of ship faction paint. Important statuses always include text or icons.
+C_HULL = rgb("ui_error")
+C_ARMOR = rgb("steel_edge")
+C_SHIELD = rgb("signal_cyan")
+C_ENERGY = rgb("ui_warning")
+C_FOUL = rgb("veil_fringe")
 
 
 _NORMAL = {"BAD": BAD, "GOOD": GOOD, "C_HULL": C_HULL}
@@ -31,7 +38,7 @@ def configure(opacity=None, colorblind=None, large_font=None):
     """Настройки доступности: прозрачность панелей, палитра для дальтоников, крупный шрифт."""
     global PANEL_BG
     if opacity is not None:
-        PANEL_BG = (5, 9, 14, int(80 + 175 * max(0.0, min(1.0, opacity))))
+        PANEL_BG = (*PANEL_RGB, int(100 + 155 * max(0.0, min(1.0, opacity))))
     if colorblind is not None:
         globals().update(_COLORBLIND if colorblind else _NORMAL)
     if large_font is not None and Fonts.scale != (1.15 if large_font else 1.0):
@@ -89,28 +96,44 @@ _bg_cache = {}
 
 
 def panel(screen, rect, title=None, accent=ACCENT, bg=None):
-    """Полупрозрачная панель с тонкой рамкой и уголками акцентного цвета."""
+    """Layered industrial panel with semantic title bar and edge markers.
+
+    Geometry deliberately matches the original panel: UI hitboxes, text
+    offsets and input behavior are owned by callers and stay unchanged.
+    """
     rect = pygame.Rect(rect)
-    bg = bg or PANEL_BG
+    if rect.w < 2 or rect.h < 2:
+        return rect
+    bg = PANEL_BG if bg is None else bg
     key = (rect.size, bg)
     surf = _bg_cache.get(key)
     if surf is None:
         surf = pygame.Surface(rect.size, pygame.SRCALPHA)
         surf.fill(bg)
-        if len(_bg_cache) > 60:
+        if len(_bg_cache) >= 60:
             _bg_cache.clear()
         _bg_cache[key] = surf
     screen.blit(surf, rect.topleft)
     pygame.draw.rect(screen, LINE, rect, 1)
-    c = 9
-    for (x, y), (dx, dy) in ((rect.topleft, (1, 1)), ((rect.right - 1, rect.top), (-1, 1)),
-                             ((rect.left, rect.bottom - 1), (1, -1)), ((rect.right - 1, rect.bottom - 1), (-1, -1))):
-        pygame.draw.line(screen, accent, (x, y), (x + dx * c, y), 2)
-        pygame.draw.line(screen, accent, (x, y), (x, y + dy * c), 2)
+    if rect.h >= 28:
+        pygame.draw.line(screen, FAINT, (rect.x + 2, rect.y + 24),
+                         (rect.right - 3, rect.y + 24))
+    # Only two short corner brackets, to prevent decorative clutter.
+    c = min(11, rect.w // 7, rect.h // 5)
+    if c > 0:
+        pygame.draw.line(screen, accent, (rect.left, rect.top),
+                         (rect.left + c, rect.top), 2)
+        pygame.draw.line(screen, accent, (rect.left, rect.top),
+                         (rect.left, rect.top + c), 2)
+        pygame.draw.line(screen, accent, (rect.right - 1, rect.bottom - 1),
+                         (rect.right - 1 - c, rect.bottom - 1), 2)
     if title:
-        text(screen, title.upper(), (rect.x + 12, rect.y + 7), DIM, 15, bold=True)
+        text(screen, title.upper(), (rect.x + 12, rect.y + 6), TEXT, 15, bold=True)
         w = text_width(title.upper(), 15, True)
-        pygame.draw.line(screen, LINE, (rect.x + 18 + w, rect.y + 13), (rect.right - 12, rect.y + 13), 1)
+        start = rect.x + 22 + w
+        if start < rect.right - 12:
+            pygame.draw.line(screen, LINE, (start, rect.y + 13),
+                             (rect.right - 12, rect.y + 13), 1)
     return rect
 
 
@@ -151,9 +174,22 @@ def chip(screen, s, pos, color=TEXT, size=15, fill=None, anchor="topleft"):
 
 
 def selection(screen, rect):
+    """Selection has a border and a left marker, not just a color fill."""
     rect = pygame.Rect(rect)
     pygame.draw.rect(screen, SEL_BG, rect)
-    pygame.draw.line(screen, ACCENT, rect.topleft, rect.bottomleft, 2)
+    pygame.draw.rect(screen, ACCENT, rect, 1)
+    pygame.draw.line(screen, ACCENT, rect.topleft, rect.bottomleft, 3)
+
+
+def section_rule(screen, title, x, y, width, color=ACCENT):
+    """Compact technical section heading for port and engineering panels."""
+    text(screen, title.upper(), (x + 8, y), TEXT, 15, True)
+    label_w = text_width(title.upper(), 15, True)
+    pygame.draw.line(screen, color, (x, y + 1), (x, y + 16), 2)
+    start = x + label_w + 19
+    if start < x + width - 2:
+        pygame.draw.line(screen, LINE, (start, y + 10),
+                         (x + width - 2, y + 10))
 
 
 # --- иконки ---------------------------------------------------------------------
