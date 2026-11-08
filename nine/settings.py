@@ -31,6 +31,7 @@ ACTIONS = (
     ("util4", "Модуль 4", "4"),
     ("map", "Карта", "m"),
     ("codex", "Кодекс", "k"),
+    ("journal", "Журнал капитана", "j"),
     ("help", "Справка", "h"),
 )
 ACTION_NAME = {k: name for k, name, _ in ACTIONS}
