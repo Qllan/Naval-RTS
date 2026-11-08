@@ -47,6 +47,7 @@ class Game:
         self._seen_loss = None
         self._death_timer = 0.0
         self._fps = 60.0
+        self.show_debug = False
         self.played = False         # сохраняем только если действительно играли
         self.tip = None
         self.apply_settings()
@@ -148,6 +149,8 @@ class Game:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 self.running = False
+            elif e.type == pygame.KEYDOWN and e.key == pygame.K_F3:
+                self.show_debug = not self.show_debug
             elif e.type == pygame.KEYDOWN and e.key == pygame.K_F12:
                 path = f"screenshot_{int(time.time())}.png"
                 pygame.image.save(self.screen, path)
@@ -252,10 +255,33 @@ class Game:
             self.tip.draw()
             if self.tip.done:
                 self.tip = None
+        if self.show_debug:
+            self.draw_debug_overlay(dt)
         if self.settings.show_fps:
             self._fps += (1 / max(dt, 1e-3) - self._fps) * 0.05
             ui.text(self.screen, f"{self._fps:3.0f} FPS", (self.screen.get_width() // 2, self.screen.get_height() - 18),
                     ui.DIM, 15, anchor="midtop")
+
+    def draw_debug_overlay(self, dt):
+        """F3: diagnostics for playtests; never changes simulation state."""
+        w, p = self.world, self.world.player
+        fps = self.clock.get_fps() or 1.0 / max(dt, 1e-3)
+        lines = (
+            f"DEBUG | FPS {fps:.0f} | frame {dt * 1000:.1f} ms",
+            f"Seed {w.seed} | t {w.t:.1f}s | x {p.pos.x:.0f} y {p.pos.y:.0f}",
+            f"Speed {p.speed:.1f} | Veil {w.density_at(p.pos):.2f}",
+            f"Radar {w.radar_range():.0f} | Vision {w.visual_range():.0f}",
+            f"Pirates {len(w.pirates)} | Rays {len(w.rays)} | Tihodonts {len(w.tihodonts)}",
+            f"Shots {len(w.projectiles)} | Resources {len(w.nodes)} | Loot {len(w.loot)}",
+        )
+        font = pygame.font.Font(None, 22)
+        width = max(font.size(line)[0] for line in lines) + 24
+        height = len(lines) * 23 + 14
+        panel = pygame.Surface((width, height), pygame.SRCALPHA)
+        panel.fill((5, 12, 20, 220))
+        for i, line in enumerate(lines):
+            panel.blit(font.render(line, True, (194, 222, 230)), (12, 7 + i * 23))
+        self.screen.blit(panel, (12, 12))
 
     def _check_loss(self, dt):
         loss = self.world.last_loss
