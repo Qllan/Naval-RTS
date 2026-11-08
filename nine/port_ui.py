@@ -915,6 +915,9 @@ class PortUI:
     def _service(self, world, body):
         rows = [(label, UI) for label, _ in self.service_items(world)]
         self._list(rows, body.x, body.y, 560, self.sel)
+        self.text(f"Гильдия: {world.guild_rank()} · скидка "
+                  f"{int(world.service_discount() * 100)}%",
+                  (body.right - 295, body.y + 245), ACCENT, self.small)
         p = world.player
         y = body.y + len(rows) * 24 + 20
         self.text(f"Корпус {int(p.hp)}/{int(p.hull.hp)}   Броня {int(p.armor)}/{int(p.armor_max)}   "
@@ -953,11 +956,12 @@ class PortUI:
     def _contracts(self, world, body):
         """Accept and turn in contracts at the port; rows are clickable."""
         self.text("ДОСКА КОНТРАКТОВ", (body.x, body.y), UI, self.big)
-        self.text("Примите задание, выполните условия в море и вернитесь в порт.",
-                  (body.x, body.y + 44), DIM, self.small)
+        self.text(f"Гильдия: {world.guild_rank()} · "
+                  f"доверие {world.guild_reputation[world.active_port]}/100",
+                  (body.x, body.y + 40), ACCENT, self.small)
         for i, (key, label) in enumerate(self.contract_items(world)):
-            y = body.y + 75 + i * 68
-            rect = pygame.Rect(body.x, y, min(760, body.w), 60)
+            y = body.y + 69 + i * 59
+            rect = pygame.Rect(body.x, y, min(760, body.w), 54)
             self.zones.append((rect, "row", i))
             state = world.contracts.get(key)
             status = "ДОСТУПЕН" if state is None else (
@@ -967,7 +971,7 @@ class PortUI:
             elif rect.collidepoint(self.mouse):
                 pygame.draw.rect(self.screen, ui.FAINT, rect, 1)
             self.text(label, (rect.x + 12, rect.y + 8), UI, self.small)
-            self.text(status, (rect.x + 12, rect.y + 33),
+            self.text(status, (rect.x + 12, rect.y + 30),
                       ACCENT if status == "ВЫПОЛНЕН" else DIM, self.small)
         self.text("ЛКМ / ENTER — принять, сдать или обновить контракт",
                   (body.x, body.bottom - 38), DIM, self.small)
