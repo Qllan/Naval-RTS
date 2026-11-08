@@ -140,7 +140,12 @@ def from_dict(d):
     mem = np.frombuffer(base64.b64decode(m["data"]), np.uint8).reshape(m["shape"])
     if mem.shape == world.memory.shape:
         world.memory = mem.astype(np.float32) / 255
-    world.marks = {k: {**v, "pos": Vector2(v["pos"])} for k, v in d["marks"].items()}
+    world.marks.update({k: {**v, "pos": Vector2(v["pos"])} for k, v in d["marks"].items()})
+    # New trade platform remains visible when loading pre-platform saves.
+    world.marks["platform"] = {
+        "pos": Vector2(world.platform), "label": "Торговая платформа",
+        "kind": "port", "clarity": 1.0,
+    }
     world.waypoint = Vector2(d["waypoint"]) if d["waypoint"] else None
     world.codex = dict(d["codex"])
     world.goals_done = set(d["goals"])
