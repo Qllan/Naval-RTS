@@ -83,7 +83,7 @@ def ship_overlaps(ship, pos, padding=0.0):
     radius = ship.radius + padding
     if dx * dx + dy * dy >= radius * radius:
         return False
-    if ship.hull.key != "bastion":
+    if getattr(getattr(ship, "hull", None), "key", None) != "bastion":
         return True
     import math
     angle = math.radians(ship.angle)
