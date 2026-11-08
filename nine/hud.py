@@ -558,6 +558,9 @@ class Hud:
         for trader in world.trade_traffic.snapshot(world.t):
             if world.on_radar(trader.pos) or world.perceives(trader.pos):
                 pygame.draw.circle(s, ui.C_ENERGY, m(trader.pos), 2)
+        for escort in world.trade_traffic.escort_snapshot(world.t):
+            if world.on_radar(escort.pos) or world.perceives(escort.pos):
+                pygame.draw.circle(s, (145, 180, 255), m(escort.pos), 2)
         for ph in world.phantoms:
             pygame.draw.circle(s, ui.BAD, m(ph["pos"]), 2)
         for ev in world.events.active:
