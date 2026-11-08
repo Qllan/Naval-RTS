@@ -135,11 +135,15 @@ def test_shipyard_low_money_price_does_not_overlap_warning():
     original = port.text
 
     def record(value, pos, *args, **kwargs):
-        seen.append((str(value), pos[1]))
+        seen.append((str(value), pos))
         return original(value, pos, *args, **kwargs)
 
     port.text = record
     port.draw(world, 0.4)
-    offer_price = next(y for text, y in seen if text == "6,650 КК")
-    warning = next(y for text, y in seen if "НЕ ХВАТАЕТ" in text)
+    # The same amount also appears as a catalogue label on the left.
+    # The regression concerns only the large price inside the right pane.
+    offer_price = next(pos[1] for text, pos in seen
+                       if text == "6,650 КК" and pos[0] > 800)
+    warning = next(pos[1] for text, pos in seen
+                   if "НЕ ХВАТАЕТ" in text and pos[0] > 800)
     assert warning - offer_price >= 40
