@@ -555,6 +555,9 @@ class Hud:
         for pi in world.pirates:
             if world.on_radar(pi.ship.pos) or world.perceives(pi.ship.pos):
                 pygame.draw.circle(s, ui.BAD, m(pi.ship.pos), 2)
+        for trader in world.trade_traffic.snapshot(world.t):
+            if world.on_radar(trader.pos) or world.perceives(trader.pos):
+                pygame.draw.circle(s, ui.C_ENERGY, m(trader.pos), 2)
         for ph in world.phantoms:
             pygame.draw.circle(s, ui.BAD, m(ph["pos"]), 2)
         for ev in world.events.active:
