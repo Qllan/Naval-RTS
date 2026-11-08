@@ -582,6 +582,13 @@ class MapScreen(Screen):
             pygame.draw.circle(s, (110, 220, 205), target, radius, 2)
             ui.text(s, "РАЗВЕДКА", target + Vector2(0, -radius - 5),
                     (150, 240, 220), 15, anchor="midbottom")
+        escort_task = world.contracts.get("escort")
+        if escort_task and escort_task["status"] == "active" and not escort_task["arrived"]:
+            trader = world.trade_traffic.snapshot(world.t)[escort_task["convoy"]]
+            target = self.w2m(trader.pos)
+            pygame.draw.circle(s, (145, 230, 150), target, 8, 2)
+            ui.text(s, "КОНВОЙ", target + Vector2(0, -10),
+                    (145, 230, 150), 15, anchor="midbottom")
         if self.layers["contacts"] and not dead:
             for trader in world.trade_traffic.snapshot(world.t):
                 if world.perceives(trader.pos) or world.on_radar(trader.pos):
@@ -708,6 +715,10 @@ def journal_entries(world):
         elif key == "scout":
             current = int(bool(state.get("explored")))
             objective = "Посетить отмеченную область Пелены"
+        elif key == "escort":
+            current = int(bool(state.get("arrived")))
+            origin = "Порта беженцев" if state["origin"] == "port" else "Платформы"
+            objective = f"Сопроводить конвой №{state['convoy'] + 1} от {origin}"
         else:
             continue
         status = "ЗАВЕРШЁН" if done else (
@@ -740,19 +751,19 @@ class CaptainsJournal(Screen):
             ui.text(s, "Контрактов пока нет. Возьмите задание в порту.",
                     r.center, ui.DIM, 20, anchor="center")
         for i, (_, name, objective, current, target, reward, status) in enumerate(entries):
-            y = r.y + 90 + i * 112
-            if y + 104 > r.bottom - 35:
+            y = r.y + 90 + i * 90
+            if y + 82 > r.bottom - 35:
                 break
-            row = pygame.Rect(r.x + 18, y, r.w - 36, 101)
+            row = pygame.Rect(r.x + 18, y, r.w - 36, 82)
             pygame.draw.rect(s, ui.FAINT, row, 1)
-            ui.text(s, name, (row.x + 14, row.y + 8), ui.TEXT, 23, True)
+            ui.text(s, name, (row.x + 14, row.y + 7), ui.TEXT, 20, True)
             ui.text(s, status, (row.right - 12, row.y + 12),
                     ui.ACCENT if status != "В РАБОТЕ" else ui.DIM,
                     16, anchor="topright")
-            ui.text(s, objective, (row.x + 14, row.y + 44), ui.DIM, 18)
+            ui.text(s, objective, (row.x + 14, row.y + 34), ui.DIM, 17)
             progress = "Выполнено" if status == "ЗАВЕРШЁН" else f"{current}/{target}"
             ui.text(s, f"Прогресс: {progress}    Награда: {reward} КК",
-                    (row.x + 14, row.y + 71), ui.TEXT, 17)
+                    (row.x + 14, row.y + 56), ui.TEXT, 16)
         ui.text(s, "J / Esc — закрыть. Награду можно получить в порту.",
                 (r.centerx, r.bottom - 23), ui.DIM, 16, anchor="midtop")
 
