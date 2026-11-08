@@ -186,6 +186,16 @@ def from_dict(d):
                             or not 0 <= entry["close_seconds"] <= 100000
                             or type(entry.get("arrived")) is not bool):
                         continue
+                if key == "urgent":
+                    if (entry.get("origin") not in ("port", "platform")
+                            or entry.get("destination") not in ("port", "platform")
+                            or entry["origin"] == entry["destination"]
+                            or entry.get("kind") not in ("salt", "filament")
+                            or type(entry.get("amount")) is not int
+                            or entry["amount"] != world.URGENT_QUANTITY
+                            or type(entry.get("reward")) is not int
+                            or not 300 <= entry["reward"] <= 1000):
+                        continue
                 cycle = entry.get("cycle", 0)
                 if type(cycle) is not int or not 0 <= cycle <= 9999:
                     continue
@@ -196,6 +206,11 @@ def from_dict(d):
                     world.contracts[key]["cycle"] = cycle
                 if key == "scout":
                     world.contracts[key]["explored"] = entry["explored"]
+                elif key == "urgent":
+                    world.contracts[key].update({
+                        name: entry[name] for name in (
+                            "origin", "destination", "kind", "amount", "reward")
+                    })
                 elif key == "escort":
                     world.contracts[key].update({
                         "origin": entry["origin"], "convoy": entry["convoy"],
