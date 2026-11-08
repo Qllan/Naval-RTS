@@ -861,15 +861,46 @@ class World:
         "pirates": ("Охота на рейдеров", 2, 350),
         "scout": ("Разведка Пелены", 1, 300),
         "escort": ("Сопровождение конвоя", 1, 450),
+        "urgent": ("Срочная поставка", 10, 300),
     }
     SCOUT_POS = (4000.0, 3600.0)
     SCOUT_RADIUS = 320.0
     SCOUT_ZONES = ((4000.0, 3600.0), (3500.0, 3200.0),
                    (4500.0, 4200.0), (3100.0, 4800.0))
 
+    URGENT_THRESHOLD = 60
+    URGENT_QUANTITY = 10
+
+    def urgent_offer(self):
+        """Pick a shortage in the *other* port; don't fabricate demand.
+
+        Select only commodities stocked at the origin. Ordering is stable for
+        identical inventories, so reopening the board doesn't reroll offers.
+        """
+        origin = self.active_port
+        destination = "platform" if origin == "port" else "port"
+        options = []
+        for kind in ("salt", "filament"):
+            missing = self.URGENT_THRESHOLD - self.market_available(kind, destination)
+            if (missing > 0 and self.market_available(kind, origin) >= self.URGENT_QUANTITY):
+                options.append((missing, kind))
+        if not options:
+            return None
+        shortage, kind = max(options, key=lambda item: (item[0], item[1]))
+        return {
+            "origin": origin, "destination": destination, "kind": kind,
+            "amount": self.URGENT_QUANTITY,
+            "reward": 300 + 4 * shortage,
+        }
+
     def contract_terms(self, key):
         """Deterministic offer for a cycle; no extra RNG state to save."""
         name, target, reward = self.CONTRACTS[key]
+        if key == "urgent":
+            offer = self.contracts.get(key) or self.urgent_offer()
+            if offer is not None:
+                return name, offer["amount"], offer["reward"]
+            return name, target, reward
         state = self.contracts.get(key) or {}
         cycle = state.get("cycle", 0)
         if cycle > 0:
@@ -939,6 +970,16 @@ class World:
         if key not in self.CONTRACTS or state is None or state["status"] != "done":
             return False
         cycle = state.get("cycle", 0) + 1
+        if key == "urgent":
+            offer = self.urgent_offer()
+            if offer is None:
+                return False
+            self.contracts[key] = {
+                "status": "active", "start_kills": self.captain.kills,
+                "cycle": cycle, **offer,
+            }
+            self.say(f"Новый срочный заказ: {offer['kind']} → {offer['destination']}")
+            return True
         self.contracts[key] = {
             "status": "active", "start_kills": self.captain.kills, "cycle": cycle
         }
@@ -952,6 +993,18 @@ class World:
     def contract_label(self, key):
         name, amount, reward = self.contract_terms(key)
         state = self.contracts.get(key)
+        if key == "urgent":
+            if state is None:
+                offer = self.urgent_offer()
+                if offer is None:
+                    return "Срочная поставка — дефицитных заказов сейчас нет"
+                return (f"Срочная поставка: {offer['kind']} ×{amount} → "
+                        f"{offer['destination']}, награда {reward} КК")
+            if state["status"] == "done":
+                return "Срочная поставка выполнена — проверить новый заказ"
+            have = int(self.captain.cargo.get(state["kind"], 0))
+            return (f"Срочная поставка: {state['kind']} {min(have, amount)}/{amount}"
+                    f" → {state['destination']} ({reward} КК)")
         if state is None:
             return f"Контракт: {name} ({amount}) — принять, награда {reward} КК"
         if state["status"] == "done":
@@ -976,6 +1029,16 @@ class World:
             return False
         state = self.contracts.get(key)
         if state is None:
+            if key == "urgent":
+                offer = self.urgent_offer()
+                if offer is None:
+                    return False
+                self.contracts[key] = {
+                    "status": "active", "start_kills": self.captain.kills,
+                    "cycle": 0, **offer,
+                }
+                self.say("Принят срочный заказ. Доставьте товар в другой порт.")
+                return True
             self.contracts[key] = {"status": "active", "start_kills": self.captain.kills}
             if key == "scout":
                 self.contracts[key]["explored"] = False
@@ -998,6 +1061,16 @@ class World:
         elif key == "escort":
             if not state["arrived"]:
                 return False
+        elif key == "urgent":
+            kind = state["kind"]
+            if (self.active_port != state["destination"]
+                    or self.captain.cargo.get(kind, 0) + 1e-6 < amount):
+                return False
+            self.captain.cargo[kind] -= amount
+            if self.captain.cargo[kind] <= 1e-6:
+                del self.captain.cargo[kind]
+            self.market_stock[state["destination"]][kind] = min(
+                MAX_STOCK, self.market_stock[state["destination"]][kind] + amount)
         elif self.captain.kills - state["start_kills"] < amount:
             return False
         state["status"] = "done"
