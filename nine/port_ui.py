@@ -844,7 +844,8 @@ class PortUI:
         self.screen.set_clip(clip)
 
     def _hull_layout(self, ship, body, row_count, preview_fit=None, focus=False,
-                     rect_override=None):        """Чертёж корпуса: оружие на палубе, внутренние системы — по бортам.
+                     rect_override=None):
+        """Чертёж корпуса: оружие на палубе, внутренние системы — по бортам.
 
         Внутренние узлы имеют отдельные координаты diagram_pos, которые
         задаются проектом корпуса. Бортовые ярлыки являются кликабельными,
@@ -1177,24 +1178,23 @@ class PortUI:
                 self._fitting_impact(world, candidate, right, right.y + 282)
                 notices = engineering_notices(candidate, world.cargo_used, DENSE)
                 note = notices[0].short if notices else None
-                yy = right.bottom - 98
+                yy = right.bottom - 80
                 if issue:
                     self.text("× УСТАНОВКА НЕДОСТУПНА", (right.x + 16, yy),
                               ui.BAD, self.small)
-                    self.text(issue[:40], (right.x + 16, yy + 19), ui.BAD, self.small)
+                    # Full explanation remains available in the item's tooltip.
                 elif note:
-                    self.text("! " + note[:40], (right.x + 16, yy + 12), WARN, self.small)
+                    self.text("! " + note[:40], (right.x + 16, yy), WARN, self.small)
                 else:
-                    self.text("✓ МОЖНО УСТАНОВИТЬ", (right.x + 16, yy + 12),
-                              ui.GOOD, self.small)
+                    self.text("✓ МОЖНО УСТАНОВИТЬ", (right.x + 16, yy), ui.GOOD, self.small)
                 self._btn((right.x + 15, right.bottom - 48, right.w - 30, 35),
                           "УСТАНОВИТЬ  ·  ENTER", "install",
                           ACCENT if not issue else ui.LINE, enabled=not issue)
             else:
                 self.text("Для этого узла нет доступных модулей.",
                           (right.x + 16, right.y + 89), WARN, self.small)
-            self._btn((right.right - 124, right.y + 4, 109, 24),
-                      "НАЗАД  ·  ESC", "back", DIM)
+            self._btn((right.right - 43, right.y + 7, 27, 26),
+                      "×", "back", DIM)
         else:
             key = p.fit[self.sel]
             if key:
