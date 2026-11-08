@@ -44,7 +44,7 @@ def test_port_redesign_keeps_shipyard_and_fitting_mouse_targets():
     port = PortUI(screen)
     port.tab = 1
     port.draw(world, 0.4)
-    assert len([z for z in port.zones if z[1] == "tab"]) == 4
+    assert len([z for z in port.zones if z[1] == "tab"]) == 5
     assert any(kind == "row" for _, kind, _ in port.zones)
     assert any(name == "leave" for _, kind, name in port.zones if kind == "button")
     port.tab = 2
@@ -55,7 +55,7 @@ def test_port_redesign_keeps_shipyard_and_fitting_mouse_targets():
     port.draw(world, 0.4)
     assert len([z for z in port.zones if z[1] == "slot"]) >= len(world.player.hull.slots)
     assert any(kind == "pick" for _, kind, _ in port.zones)
-    assert len([z for z in port.zones if z[1] == "tab"]) == 4
+    assert len([z for z in port.zones if z[1] == "tab"]) == 5
     ui.Fonts.reset()
 
 
