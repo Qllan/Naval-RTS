@@ -723,11 +723,16 @@ def journal_entries(world):
             current = min(target, int(world.captain.cargo.get(state["kind"], 0)))
             destination = "Порт беженцев" if state["destination"] == "port" else "Торговая платформа"
             objective = f"Доставить {state['kind']} в {destination}"
+        elif key == "guild":
+            current = min(target, int(world.captain.cargo.get("salt", 0)))
+            destination = "Порт беженцев" if state["hub"] == "port" else "Торговая платформа"
+            objective = f"Гильдия: доставить соль-металл в {destination}"
         else:
             continue
         status = "ЗАВЕРШЁН" if done else (
             "МОЖНО СДАТЬ В ПОРТ" if current >= target
             and (key != "urgent" or world.active_port == state["destination"])
+            and (key != "guild" or world.active_port == state["hub"])
             else "В РАБОТЕ"
         )
         entries.append((key, name, objective, current, target, reward, status))
@@ -771,6 +776,9 @@ class CaptainsJournal(Screen):
             progress = "Выполнено" if status == "ЗАВЕРШЁН" else f"{current}/{target}"
             ui.text(s, f"Прогресс: {progress}    Награда: {reward} КК",
                     (row.x + 14, row.y + 48), ui.TEXT, 15)
+        rep = self.game.world.guild_reputation
+        ui.text(s, f"Гильдия: Порт {rep['port']}/100 · Платформа {rep['platform']}/100",
+                (r.x + 22, r.bottom - 82), ui.DIM, 15)
         ui.text(s, self.game.world.market_bulletin(),
                 (r.x + 22, r.bottom - 63), ui.ACCENT, 15)
         ui.text(s, "J / Esc — закрыть. Награду можно получить в порту.",
