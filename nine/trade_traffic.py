@@ -147,6 +147,25 @@ class TradeTraffic:
         return tuple(result)
 
 
+    def leg(self, index, time):
+        """Return voyage ID, travel direction and underway flag.
+
+        The arrival dwell belongs to the leg just completed; the initial
+        departure dwell belongs to the previous inbound leg. This prevents
+        an unrelated later voyage from finishing an accepted escort job.
+        """
+        offset = (0.0, self.period / 2)[index]
+        absolute = time + offset
+        cycle = math.floor(absolute / self.period)
+        phase = absolute % self.period
+        if phase < PORT_DWELL:
+            return cycle * 2 - 1, -1, False
+        if phase < PORT_DWELL + self.sailing_time:
+            return cycle * 2, 1, True
+        if phase < 2 * PORT_DWELL + self.sailing_time:
+            return cycle * 2, 1, False
+        return cycle * 2 + 1, -1, True
+
     def escort_snapshot(self, time):
         """Each guard trails its trader on the exact same island-safe route.
 
