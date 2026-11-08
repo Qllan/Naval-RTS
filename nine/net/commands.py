@@ -1,6 +1,6 @@
 """Explicit, bounded command contract. No client-owned world state is accepted."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 from pygame.math import Vector2
@@ -91,3 +91,22 @@ class PlayerCommand:
                         pips=list(self.pips) if impulses else [],
                         cycle_ammo=self.cycle_ammo if impulses else False,
                         toggle_spotlight=self.toggle_spotlight if impulses else False)
+
+
+
+def coalesce_commands(previous, newest):
+    """Bounded newest state plus accumulated single-frame input impulses.
+
+    Snapshot-based movement uses the newest message, while actions received
+    earlier within the same tick are preserved. This is an in-memory
+    adapter, not a reliable network transport or ACK protocol.
+    """
+    if previous is None:
+        return newest
+    return replace(
+        newest,
+        activate=tuple(dict.fromkeys(previous.activate + newest.activate))[:4],
+        pips=(previous.pips + newest.pips)[:4],
+        cycle_ammo=previous.cycle_ammo or newest.cycle_ammo,
+        toggle_spotlight=previous.toggle_spotlight or newest.toggle_spotlight,
+    )

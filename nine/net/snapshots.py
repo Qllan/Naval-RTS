@@ -56,14 +56,20 @@ class SnapshotStream:
     must enforce per-player visibility and independently ACK/resync packets.
     """
 
-    def __init__(self, radius=1600, max_entities=128, full_every=60):
+    def __init__(self, radius=1600, max_entities=128, full_every=60, registry=None):
         if (radius <= 0 or type(max_entities) is not int or max_entities < 1 or
             type(full_every) is not int or full_every < 1):
             raise ValueError("Invalid snapshot bounds")
         self.radius = float(radius)
         self.max_entities = max_entities
         self.full_every = full_every
-        self.registry = EntityRegistry()
+        self.registry = registry if registry is not None else EntityRegistry()
+        self._previous = {}
+        self._last_tick = None
+        self._last_frame = None
+
+    def invalidate(self):
+        """Force a new full frame after roster changes or a reconnect."""
         self._previous = {}
         self._last_tick = None
         self._last_frame = None

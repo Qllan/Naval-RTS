@@ -5,10 +5,8 @@ This adapter deliberately refuses other owners rather than pretending that
 multiple network clients can already share a World.
 """
 
-from dataclasses import replace
-
 from .clock import FixedTickClock
-from .commands import PlayerCommand
+from .commands import PlayerCommand, coalesce_commands
 from .snapshots import SnapshotStream
 from ..spatial import PositionGrid
 from ..world import Controls, World
@@ -47,16 +45,7 @@ class ServerSimulation:
         self._last_seq = command.seq
         # Keep latest movement, but preserve one-shot actions from packets
         # received within the same tick. The coalesced input stays bounded.
-        if self._pending is not None:
-            before = self._pending
-            command = replace(
-                command,
-                activate=tuple(dict.fromkeys(before.activate + command.activate))[:4],
-                pips=(before.pips + command.pips)[:4],
-                cycle_ammo=before.cycle_ammo or command.cycle_ammo,
-                toggle_spotlight=before.toggle_spotlight or command.toggle_spotlight,
-            )
-        self._pending = command
+        self._pending = coalesce_commands(self._pending, command)
         self.accepted += 1
         return True
 
