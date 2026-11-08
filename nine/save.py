@@ -39,7 +39,8 @@ def to_dict(world):
         "clock_offset": world.clock_offset,
         "captain": {"credits": cap.credits, "debt": cap.debt, "trauma": cap.trauma, "cargo": cap.cargo,
                     "storage": cap.storage, "ammo_stock": cap.ammo_stock,
-                    "pending_insurance": cap.pending_insurance, "kills": cap.kills},
+                    "pending_insurance": cap.pending_insurance, "kills": cap.kills,
+                    "guild_certificates": cap.guild_certificates},
         "ship": {
             "hull": p.hull.key, "fit": p.fit, "groups": {str(k): v for k, v in p.groups.items()},
             "guild_hold_upgrade": p.guild_hold_upgrade,
@@ -129,7 +130,11 @@ def from_dict(d):
     world.clock_offset = d.get("clock_offset", 0.0)
     cap = world.captain
     for k, v in d["captain"].items():
-        setattr(cap, k, v)
+        if k == "guild_certificates":
+            if type(v) is int and 0 <= v <= 9999:
+                cap.guild_certificates = v
+        else:
+            setattr(cap, k, v)
     p = Ship(s["hull"], Vector2(s["pos"]), s["angle"], fit=s["fit"])
     # Legacy saves contain no guild rack. Reject non-boolean values.
     p.guild_hold_upgrade = (s.get("guild_hold_upgrade") is True

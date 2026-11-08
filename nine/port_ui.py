@@ -279,6 +279,10 @@ class PortUI:
             items.append((
                 f"Усиленный трюм: +12 вместимости — {status}",
                 world.buy_guild_hold_upgrade))
+            items.append((
+                f"Обмен сертификата ×1 → гильдейский грузовой блок II "
+                f"(есть: {world.captain.guild_certificates})",
+                world.redeem_guild_certificate))
         return items
 
     def contract_items(self, world):
@@ -289,7 +293,10 @@ class PortUI:
         """Модули для выбранного слота: сначала со склада, потом из магазина."""
         compat = world.compatible(self.slot)
         keys = {m.key for m in compat}
-        items = [("storage", k) for k in dict.fromkeys(world.captain.storage) if k in keys]
+        items = [("storage", k) for k in dict.fromkeys(world.captain.storage)
+                 if k in keys or (k == world.GUILD_REWARD_MODULE
+                                  and MODULES[k].category == world.player.hull.slots[self.slot].category
+                                  and MODULES[k].size <= world.player.hull.slots[self.slot].size)]
         items += [("shop", m.key) for m in sorted(compat, key=lambda m: m.price)]
         return items
 
@@ -944,7 +951,7 @@ class PortUI:
         self.text("Цены за единицу товара · Покупка и продажа партиями до 10 ед.",
                   (body.x, body.y + 43), DIM, self.small)
         rows = [(label, UI) for label, _ in self.trade_items(world)]
-        self._list(rows, body.x + 8, body.y + 90, 675, self.sel, row_h=30)
+        self._list(rows, body.x + 8, body.y + 90, 675, self.sel, row_h=27)
         x, y = body.right - 302, body.y + 90
         self.text("СРАВНЕНИЕ РЫНКОВ", (x, y), UI, self.small)
         y += 38
@@ -961,7 +968,7 @@ class PortUI:
             self.text(f"Запасы: {local} / {remote}", (x, y + 44), DIM, self.small)
             y += 75
         self.text(f"Трюм: {world.cargo_used:.1f}/{world.cargo_capacity:.0f}"
-                  f" · Гильдия: {world.guild_rank()}",
+                  f" · Сертификаты: {world.captain.guild_certificates}",
                   (body.x, body.bottom - 35), DIM, self.small)
         self.text(world.market_bulletin(), (body.x, body.bottom - 65),
                   ACCENT, self.small)
