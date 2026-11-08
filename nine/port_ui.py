@@ -976,6 +976,8 @@ class PortUI:
                  bg=(*ui.PANEL_RGB, 250))
         self.text(p.hull.name, (rect.x + 17, rect.y + 12), UI, self.big)
         self.text("КОНСТРУКЦИЯ  /  НОС ВВЕРХ", (rect.x + 18, rect.y + 47), DIM, self.small)
+        self._btn((rect.right - 226, rect.y + 13, 210, 29),
+                  "V  ИНЖЕНЕРНЫЙ ВИД", "blueprint", DIM)
         pygame.draw.line(self.screen, ui.LINE, (rect.x + 14, rect.y + 76),
                          (rect.right - 14, rect.y + 76))
         cx, cy = rect.centerx, rect.y + round(rect.h * 0.54)
@@ -986,7 +988,7 @@ class PortUI:
         for dy in (-104, -52, 0, 52, 104):
             pygame.draw.line(self.screen, ui.FAINT, (rect.x + 133, cy + dy),
                              (rect.right - 133, cy + dy))
-        zoom = min(4.3, (rect.h - 139) / hull_length(p.hull.key))
+        zoom = min(5.8, (rect.h - 139) / hull_length(p.hull.key))
         cam = Camera(self.w, self.h, zoom=zoom)
         cam.center = Vector2((self.w / 2 - cx) / zoom, (self.h / 2 - cy) / zoom)
         # Projected build only; never change the actual ship/cargo.
@@ -1061,7 +1063,7 @@ class PortUI:
             changed = abs(a - b) > 0.05
             positive = (b > a) == higher
             color = (ui.GOOD if positive else ui.BAD) if changed else DIM
-            yy = y + 24 + i * 23
+            yy = y + 24 + i * 19
             self.text(label, (rect.x + 17, yy), DIM, self.small)
             value = f"{a:.0f} → {b:.0f}" if changed else f"{a:.0f} ="
             self.text(value, (rect.right - 17, yy), color, self.small, right=True)
@@ -1174,11 +1176,11 @@ class PortUI:
                            self.pick_sel - begin, 30, zone="pick", first=begin)
                 if len(lines) > visible_items:
                     self.text(f"{self.pick_sel + 1} / {len(lines)}  ·  W/S",
-                              (right.right - 18, right.y + 267), DIM, self.small, right=True)
+                              (right.right - 18, right.y + 258), DIM, self.small, right=True)
                 self._fitting_impact(world, candidate, right, right.y + 282)
                 notices = engineering_notices(candidate, world.cargo_used, DENSE)
                 note = notices[0].short if notices else None
-                yy = right.bottom - 80
+                yy = right.bottom - 73
                 if issue:
                     self.text("× УСТАНОВКА НЕДОСТУПНА", (right.x + 16, yy),
                               ui.BAD, self.small)
