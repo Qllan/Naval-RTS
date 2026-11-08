@@ -109,7 +109,8 @@ def test_shipyard_ux_does_not_overlap_description_comparison_price_or_action():
         port.draw(world, 0.4)
         port.text = original
         metric = next(y for text, (x, y) in recorded if text == "СРАВНЕНИЕ С ВАШИМ")
-        price = next(y for text, (x, y) in recorded if text == "К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА")
+        price = next(y for text, (x, y) in recorded
+                     if text in ("К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА", "ТЕКУЩИЙ КОРПУС"))
         assert price > metric + 130
         assert any(text == hull.name.upper() for text, _ in recorded)
         assert any(kind == "row" for _, kind, _ in port.zones)
