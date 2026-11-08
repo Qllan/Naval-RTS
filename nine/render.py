@@ -16,6 +16,7 @@ from .gfx.camera import Camera
 from .gfx.fx import FX
 from .gfx.islands_art import IslandArt
 from .gfx.port_art import PortArt, port_lights
+from .gfx.platform_art import TradePlatformArt, platform_lights
 from .gfx.lighting import Lighting, ambient_color, sun_shadow
 from .gfx.ocean import FogOfWar, Ocean
 from .gfx.ship_art import ShipArt, nav_lights, window_lights
@@ -37,6 +38,7 @@ class Renderer:
         self.wakes = Wakes()
         self.islands = IslandArt()
         self.port = PortArt()
+        self.trade_platform = TradePlatformArt()
         self.motes = VF.VeilMotes()
         self.sky = VF.SkyGlimpse(self.w, self.h)
         self.distortion = True            # искажения в плотной Пелене (настройка)
@@ -115,6 +117,7 @@ class Renderer:
         EF.draw_under(screen, cam, world, self.fx)
         self.ocean.draw_eye_under(screen, cam, world, self.fx)
         self.port.draw(screen, cam, world, self.font)
+        self.trade_platform.draw(screen, cam, world, self.font)
         self.fx.draw(screen, cam, "water")
 
         for n in world.nodes:
@@ -255,6 +258,9 @@ class Renderer:
         if cam.visible(world.port, 400):
             for lp, col, r in port_lights(world):
                 add(lp, r, col, 1.0)
+        if cam.visible(world.platform, 330):
+            for lp, col, radius in platform_lights(world):
+                add(lp, radius, col, 1.0)
         for n in world.nodes:
             if n.kind != "salt":
                 col = {"condensate": (170, 110, 240), "filament": (200, 170, 255), "zero": (255, 255, 255)}[n.kind]
