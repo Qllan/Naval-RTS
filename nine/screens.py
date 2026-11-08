@@ -185,6 +185,7 @@ class PauseMenu(Screen):
         self.menu = Menu([
             ("Продолжить", self.close),
             ("Карта", lambda: game.push(MapScreen(game))),
+            ("Журнал капитана", lambda: game.push(CaptainsJournal(game))),
             ("Кодекс", lambda: game.push(CodexScreen(game))),
             ("Настройки", lambda: game.push(SettingsScreen(game))),
             ("Справка по управлению", self.help),
@@ -680,6 +681,74 @@ def _dashed(s, col, a, b, dash=8):
     step = d / n
     for i in range(0, n, 2):
         pygame.draw.line(s, col, a + step * i, a + step * (i + 1))
+
+
+# --- журнал капитана: текущие и завершённые контракты ----------------------------
+
+def journal_entries(world):
+    """Read-only mission snapshot. No claim/reward side effects."""
+    entries = []
+    for key, state in world.contracts.items():
+        if key not in world.CONTRACTS or not isinstance(state, dict):
+            continue
+        name, target, reward = world.CONTRACTS[key]
+        done = state.get("status") == "done"
+        if key == "salt":
+            current = min(target, int(world.captain.cargo.get("salt", 0)))
+            objective = "Доставить соль-металл"
+        elif key == "pirates":
+            current = min(target, max(0, world.captain.kills - state.get("start_kills", 0)))
+            objective = "Уничтожить рейдеров"
+        elif key == "scout":
+            current = int(bool(state.get("explored")))
+            objective = "Посетить отмеченную область Пелены"
+        else:
+            continue
+        status = "ЗАВЕРШЁН" if done else (
+            "МОЖНО СДАТЬ В ПОРТ" if current >= target else "В РАБОТЕ"
+        )
+        entries.append((key, name, objective, current, target, reward, status))
+    return entries
+
+
+class CaptainsJournal(Screen):
+    """Mission journal is available at sea (J) and from the pause menu."""
+
+    def handle(self, e):
+        if e.type == pygame.KEYDOWN and e.key in (
+                pygame.K_ESCAPE, self.game.settings.key("journal")):
+            self.close()
+
+    def draw(self):
+        s = self.screen
+        dim(s, int(200 * self.k))
+        w, h = min(820, self.w - 40), min(550, self.h - 40)
+        r = self.slide(((self.w - w) // 2, (self.h - h) // 2, w, h))
+        ui.panel(s, r, "Журнал капитана")
+        entries = journal_entries(self.game.world)
+        active = sum(1 for e in entries if e[6] != "ЗАВЕРШЁН")
+        completed = len(entries) - active
+        ui.text(s, f"Активных: {active}    Завершено: {completed}",
+                (r.x + 22, r.y + 42), ui.DIM, 18)
+        if not entries:
+            ui.text(s, "Контрактов пока нет. Возьмите задание в порту.",
+                    r.center, ui.DIM, 20, anchor="center")
+        for i, (_, name, objective, current, target, reward, status) in enumerate(entries):
+            y = r.y + 90 + i * 112
+            if y + 104 > r.bottom - 35:
+                break
+            row = pygame.Rect(r.x + 18, y, r.w - 36, 101)
+            pygame.draw.rect(s, ui.FAINT, row, 1)
+            ui.text(s, name, (row.x + 14, row.y + 8), ui.TEXT, 23, True)
+            ui.text(s, status, (row.right - 12, row.y + 12),
+                    ui.ACCENT if status != "В РАБОТЕ" else ui.DIM,
+                    16, anchor="topright")
+            ui.text(s, objective, (row.x + 14, row.y + 44), ui.DIM, 18)
+            progress = "Выполнено" if status == "ЗАВЕРШЁН" else f"{current}/{target}"
+            ui.text(s, f"Прогресс: {progress}    Награда: {reward} КК",
+                    (row.x + 14, row.y + 71), ui.TEXT, 17)
+        ui.text(s, "J / Esc — закрыть. Награду можно получить в порту.",
+                (r.centerx, r.bottom - 23), ui.DIM, 16, anchor="midtop")
 
 
 # --- кодекс ----------------------------------------------------------------------------

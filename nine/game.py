@@ -12,7 +12,7 @@ from .hud import Hud
 from .port_ui import PortUI
 from .render import Renderer
 from . import save as saves
-from .screens import CodexScreen, Console, DeathScreen, MainMenu, MapScreen, PauseMenu, Tip
+from .screens import CaptainsJournal, CodexScreen, Console, DeathScreen, MainMenu, MapScreen, PauseMenu, Tip
 from .settings import Settings
 from .world import Controls, World
 
@@ -191,6 +191,9 @@ class Game:
             elif key == k("codex"):
                 self.audio.ui("ui_click")
                 self.push(CodexScreen(self))
+            elif key == k("journal"):
+                self.audio.ui("ui_click")
+                self.push(CaptainsJournal(self))
             elif key == k("dock") and self.world.can_dock():
                 self.docked = True
                 self.hud.show_help = False
