@@ -81,11 +81,43 @@ def combat_focus(world):
 
 class Hud:
     MINIMAP = 180
+    LOGICAL_SIZE = (1280, 720)
 
     def __init__(self, screen, world):
-        self.screen = screen
-        self.w, self.h = screen.get_size()
+        self.display = screen
+        physical = screen.get_size()
+        # Only scale up large windows; compact screens retain their native
+        # draw/input path so text is never shrunk a second time.
+        self.virtual = min(physical[0] / 1280, physical[1] / 720) > 1.05
+        self.viewport = ui.interface_viewport(physical, self.LOGICAL_SIZE)
+        self.screen = (pygame.Surface(self.LOGICAL_SIZE, pygame.SRCALPHA)
+                       if self.virtual else screen)
+        self._overlay = (pygame.Surface(self.viewport.size, pygame.SRCALPHA)
+                         if self.virtual else None)
+        self.w, self.h = self.screen.get_size()
         self.minimap_bg = self._build_minimap(world)
+
+    def to_display(self, pos):
+        """Logical HUD point -> physical screen position."""
+        if not self.virtual:
+            return (round(pos[0]), round(pos[1]))
+        return (round(self.viewport.x + pos[0] * self.viewport.w / self.w),
+                round(self.viewport.y + pos[1] * self.viewport.h / self.h))
+
+    def to_logical(self, pos):
+        """Physical point -> logical HUD point (also valid off-screen)."""
+        if not self.virtual:
+            return (float(pos[0]), float(pos[1]))
+        return ((pos[0] - self.viewport.x) * self.w / self.viewport.w,
+                (pos[1] - self.viewport.y) * self.h / self.viewport.h)
+
+    def _physical_rect(self, rect):
+        if not self.virtual:
+            return pygame.Rect(rect)
+        start = self.to_display(rect.topleft)
+        end = self.to_display(rect.bottomright)
+        return pygame.Rect(start, (max(1, end[0] - start[0]),
+                                   max(1, end[1] - start[1])))
         self.show_help = False
         self.help_until = 12.0
         self._ghost = {}           # «призрак» недавнего значения шкалы — видно, сколько сняли
@@ -142,14 +174,23 @@ class Hud:
     def draw(self, world, docked, cam=None, events=(), mouse=None):
         if docked:
             return
+        if self.virtual:
+            self.screen.fill((0, 0, 0, 0))
         dt = 1 / 60
         self.buttons, self.panels = [], []
-        self.mouse = mouse if mouse is not None else pygame.mouse.get_pos()
+        position = mouse if mouse is not None else pygame.mouse.get_pos()
+        self.mouse = self.to_logical(position)
         self.focus = combat_focus(world)
         self.visible_alerts = []
         self._track_numbers(world, dt)
         self._track_hits(world, events, dt)
         if cam is not None:
+            if self.virtual:
+                outer_cam = cam
+                class VirtualCamera:
+                    def w2s(_, point):
+                        return Vector2(self.to_logical(outer_cam.w2s(point)))
+                cam = VirtualCamera()
             self._edge_markers(world, cam)
         self._damage_direction(world)
         self._status(world, dt)
@@ -169,6 +210,17 @@ class Hud:
         if self.show_help or world.t < self.help_until:
             self._help()
         self._flashes(dt)
+        if self.virtual:
+            # Reuse the same transparent destination; render game world at
+            # its native size. Convert click regions BEFORE Game uses them.
+            pygame.transform.smoothscale(self.screen, self.viewport.size,
+                                         self._overlay)
+            self.display.blit(self._overlay, self.viewport.topleft)
+            self.buttons = [(self._physical_rect(rect), action)
+                            for rect, action in self.buttons]
+            self.panels = [self._physical_rect(rect) for rect in self.panels]
+            if self.minimap_rect is not None:
+                self.minimap_rect = self._physical_rect(self.minimap_rect)
 
     # --- обратная связь -----------------------------------------------------------
 

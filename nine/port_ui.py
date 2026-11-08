@@ -30,11 +30,7 @@ PORT_LOGICAL_SIZE = (1280, 720)
 
 def port_viewport(size):
     """Undistorted 16:9 port canvas, letterboxed on other screen ratios."""
-    width, height = map(int, size)
-    lw, lh = PORT_LOGICAL_SIZE
-    scale = min(width / lw, height / lh)
-    w, h = round(lw * scale), round(lh * scale)
-    return pygame.Rect((width - w) // 2, (height - h) // 2, w, h)
+    return ui.interface_viewport(size, PORT_LOGICAL_SIZE)
 
 
 

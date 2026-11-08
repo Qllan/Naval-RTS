@@ -92,6 +92,16 @@ def wrap(s, width, size=16):
     return lines
 
 
+def interface_viewport(size, logical=(1280, 720)):
+    """Centered aspect-correct UI viewport shared by port and HUD."""
+    width, height = map(int, size)
+    lw, lh = logical
+    scale = min(width / lw, height / lh)
+    scaled_w, scaled_h = round(lw * scale), round(lh * scale)
+    return pygame.Rect((width - scaled_w) // 2, (height - scaled_h) // 2,
+                       scaled_w, scaled_h)
+
+
 _bg_cache = {}
 
 
