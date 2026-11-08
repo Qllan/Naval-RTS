@@ -36,6 +36,25 @@ def schematic_layout_rect(body, row_count, focus=False):
     return pygame.Rect(body.x - 8, top, 400, max(0, body.bottom - top - 6))
 
 
+def fitting_layout_regions(body):
+    """Three deliberately unequal UX zones: navigation, ship, decision.
+
+    Geometry is deterministic and can be tested without initializing a game.
+    The ship takes the largest share; all three zones remain non-overlapping.
+    """
+    body = pygame.Rect(body)
+    gutter = 8
+    rail_w = max(162, round(body.w * 0.196))
+    detail_w = max(282, round(body.w * 0.322))
+    left = pygame.Rect(body.x - 8, body.y, rail_w, body.h - 6)
+    center = pygame.Rect(left.right + gutter, body.y,
+                         body.w - rail_w - detail_w - 2 * gutter,
+                         body.h - 6)
+    right = pygame.Rect(center.right + gutter, body.y,
+                        detail_w, body.h - 6)
+    return left, center, right
+
+
 def schematic_side_slots(slots):
     """Разбить внутренние узлы на два борта и упорядочить от носа к корме.
 
@@ -292,12 +311,14 @@ class PortUI:
                 self.sel = idx
                 self._activate(world)
             elif kind == "slot":
-                if self.picker and idx != self.slot:
-                    self.slot, self.sel, self.pick_sel = idx, idx, 0
-                    self.sound("ui_click")
-                else:
-                    self.sel = idx
-                    self._activate(world)
+                # Clicking a ship node selects equipment; it never buys it.
+                # Purchase/install is an explicit CTA (or keyboard Enter).
+                old_slot = self.slot
+                was_picker = self.picker
+                self.slot, self.sel, self.picker = idx, idx, True
+                if not was_picker or idx != old_slot:
+                    self.pick_sel = 0
+                self.sound("ui_click")
             elif kind == "pick":
                 self.pick_sel = idx
                 src, key = self.picker_items(world)[idx]
@@ -310,8 +331,8 @@ class PortUI:
             drag, self.drag = self.drag, None
             z = self._zone_at(e.pos)
             if not drag["active"]:
-                if z == ("pick", self.pick_sel):
-                    self._activate(world)           # простой клик — установить в выбранный слот
+                # A candidate click only previews. It must not spend money.
+                # Use the install button, Enter, or an intentional drag/drop.
                 return None
             if z and z[0] == "slot":
                 err = world.install(z[1], drag["key"], from_storage=(drag["src"] == "storage"))
@@ -330,6 +351,26 @@ class PortUI:
     def _button(self, name, world):
         if name == "blueprint" and TABS[self.tab] == "Оснащение":
             self.blueprint_focus = not self.blueprint_focus
+            self.sound("ui_click")
+            return None
+        if name == "choose" and TABS[self.tab] == "Оснащение":
+            self.slot = self.sel
+            self.pick_sel = 0
+            self.picker = True
+            self.sound("ui_click")
+            return None
+        if name == "install" and TABS[self.tab] == "Оснащение" and self.picker:
+            self._activate(world)
+            return None
+        if name == "remove" and TABS[self.tab] == "Оснащение":
+            idx = self.slot if self.picker else self.sel
+            err = world.uninstall(idx)
+            self.say(err or "Модуль снят на склад.", ui.BAD if err else ACCENT)
+            if not err:
+                self.picker = False
+            return None
+        if name == "back" and TABS[self.tab] == "Оснащение":
+            self.picker = False
             self.sound("ui_click")
             return None
         if name == "leave":
@@ -525,7 +566,8 @@ class PortUI:
 
     def _btn(self, rect, label, name, color=UI, enabled=True):
         rect = pygame.Rect(rect)
-        self.zones.append((rect, "button", name))
+        if enabled:
+            self.zones.append((rect, "button", name))
         hot = rect.collidepoint(self.mouse)
         if hot and enabled:
             pygame.draw.rect(self.screen, ui.SEL_BG, rect)
@@ -801,14 +843,15 @@ class PortUI:
         self.art.draw(self.screen, cam, ship, "player", t)
         self.screen.set_clip(clip)
 
-    def _hull_layout(self, ship, body, row_count, preview_fit=None, focus=False):
-        """Чертёж корпуса: оружие на палубе, внутренние системы — по бортам.
+    def _hull_layout(self, ship, body, row_count, preview_fit=None, focus=False,
+                     rect_override=None):        """Чертёж корпуса: оружие на палубе, внутренние системы — по бортам.
 
         Внутренние узлы имеют отдельные координаты diagram_pos, которые
         задаются проектом корпуса. Бортовые ярлыки являются кликабельными,
         чтобы на узких корпусах значки не перекрывали друг друга.
         """
-        rect = schematic_layout_rect(body, row_count, focus=focus)
+        rect = (pygame.Rect(rect_override) if rect_override is not None
+                else schematic_layout_rect(body, row_count, focus=focus))
         if rect.h < 105:
             return
         ui.panel(self.screen, rect, accent=ui.LINE,
@@ -917,104 +960,260 @@ class PortUI:
             self.text("Выберите узел на чертеже или в списке", (rect.x + 9, rect.bottom - 19),
                       DIM, self.small)
 
-    def _fitting(self, world, body):
-        p = world.player
-        rows = []
-        for i, slot in enumerate(p.hull.slots):
-            key = p.fit[i]
-            name = MODULES[key].name if key else "— пусто —"
-            label = f"{i + 1:02d}  {CATEGORY_NAME[slot.category]} {SIZE_NAME[slot.size]}: {name}"
-            w = next((w for w in p.weapons if w.index == i), None)
-            if w is not None:
-                label += f"  [{GROUP_NAME[w.group]}]"
-            rows.append((label, UI if key else DIM, ui.MODULE_ICON[slot.category] if not key
-                         else ui.module_icon_kind(MODULES[key])))
-        self._btn((body.x - 8, body.y, 400, 25),
-                  "V  ВЕРНУТЬ СПИСОК МОДУЛЕЙ" if self.blueprint_focus
-                  else "V  РАЗВЕРНУТЬ ИНЖЕНЕРНЫЙ ЧЕРТЁЖ",
-                  "blueprint", ACCENT)
-        if not self.blueprint_focus:
-            list_y = body.y + 30
-            self._list(rows, body.x, list_y, 400,
-                       -1 if self.picker else self.sel, 22, zone="slot")
-            if self.drag and self.drag["active"]:
-                m = MODULES[self.drag["key"]]
-                for i, slot in enumerate(p.hull.slots):
-                    if m.category == slot.category and m.size <= slot.size:
-                        pygame.draw.rect(self.screen, ui.GOOD,
-                                         (body.x - 8, list_y + i * 22 - 4, 400, 22), 1)
-            if self.picker:
-                pygame.draw.rect(self.screen, (60, 90, 100),
-                                 (body.x - 6, list_y + self.slot * 22 - 3, 400, 22), 1)
-            else:
-                self.text("G — группа огня выбранного орудия (ЛКМ / ПКМ / выкл.)",
-                          (body.x, list_y + len(rows) * 22 + 9), DIM, self.small)
-                ammo = ", ".join(f"{AMMO[k].name}: {v}" for k, v in world.captain.ammo_stock.items())
-                self.text(f"Особые снаряды на борту — {ammo}",
-                          (body.x, list_y + len(rows) * 22 + 27), DIM, self.small)
+    def _fitting_hero(self, world, rect, fit=None):
+        """Dominant, actual ship art with click-through schematic callouts.
 
-        x = body.x + 420
-        preview = None
+        Hitboxes are purposefully separate from the image pixels: narrow
+        hulls still provide 30px targets, and overlapping internal modules
+        become labelled side callouts rather than unusable tiny hotspots.
+        """
+        from .gfx.camera import Camera
+        from .gfx.ship_art import hull_length
+
+        p = world.player
+        ui.panel(self.screen, rect, accent=ui.LINE,
+                 bg=(*ui.PANEL_RGB, 250))
+        self.text(p.hull.name, (rect.x + 17, rect.y + 12), UI, self.big)
+        self.text("КОНСТРУКЦИЯ  /  НОС ВВЕРХ", (rect.x + 18, rect.y + 47), DIM, self.small)
+        pygame.draw.line(self.screen, ui.LINE, (rect.x + 14, rect.y + 76),
+                         (rect.right - 14, rect.y + 76))
+        cx, cy = rect.centerx, rect.y + round(rect.h * 0.54)
+        for dx in (-114, -57, 0, 57, 114):
+            col = ui.LINE if dx == 0 else ui.FAINT
+            pygame.draw.line(self.screen, col, (cx + dx, rect.y + 92),
+                             (cx + dx, rect.bottom - 33))
+        for dy in (-104, -52, 0, 52, 104):
+            pygame.draw.line(self.screen, ui.FAINT, (rect.x + 133, cy + dy),
+                             (rect.right - 133, cy + dy))
+        zoom = min(4.3, (rect.h - 139) / hull_length(p.hull.key))
+        cam = Camera(self.w, self.h, zoom=zoom)
+        cam.center = Vector2((self.w / 2 - cx) / zoom, (self.h / 2 - cy) / zoom)
+        # Projected build only; never change the actual ship/cargo.
+        shown = Ship(p.hull.key, (0, 0), -90, fit=fit if fit is not None else list(p.fit))
+        old_clip = self.screen.get_clip()
+        self.screen.set_clip(rect.inflate(-8, -66))
+        self.art.draw(self.screen, cam, shown, "player", world.t)
+        self.screen.set_clip(old_clip)
+
+        selected = self.slot if self.picker else self.sel
+        current_fit = fit if fit is not None else p.fit
+        def at(pos):
+            x, y = pos
+            return round(cx + y * zoom), round(cy - x * zoom)
+
+        # Internal nodes: full-size labelled callouts with leader lines.
+        for side, columns in enumerate(schematic_side_slots(p.hull.slots)):
+            place_x = rect.x + 9 if side == 0 else rect.right - 115
+            count = len(columns)
+            if not count:
+                continue
+            first_y = rect.y + 101
+            span = rect.h - 166
+            for index_in_side, (idx, slot) in enumerate(columns):
+                yy = first_y + (index_in_side * span // max(1, count - 1))
+                card = pygame.Rect(place_x, yy - 13, 107, 29)
+                active = idx == selected
+                filled = current_fit[idx] is not None
+                col = ACCENT if active else ui.GOOD if filled else DIM
+                if slot.diagram_pos is not None:
+                    node = at(slot.diagram_pos)
+                    endpoint = (card.right, card.centery) if side == 0 else (card.x, card.centery)
+                    pygame.draw.line(self.screen, col if active else ui.LINE,
+                                     endpoint, node, 2 if active else 1)
+                    pygame.draw.circle(self.screen, col, node, 4 if active else 2)
+                pygame.draw.rect(self.screen, ui.SEL_BG if active else ui.PANEL_RGB, card)
+                pygame.draw.rect(self.screen, col if active else ui.LINE,
+                                 card, 2 if active else 1)
+                name = CATEGORY_NAME[slot.category].upper()
+                label = f"{idx + 1:02d} {name}"
+                if self.small.size(label)[0] > 96:
+                    label = f"{idx + 1:02d} {name[:7]}"
+                self.text(label, (card.x + 6, card.y + 6), col, self.small)
+                self.zones.append((card, "slot", idx))
+        # Weapon positions remain clickable directly on the actual hull.
+        for idx, slot in enumerate(p.hull.slots):
+            if slot.category != "weapon":
+                continue
+            sx, sy = at(slot.pos)
+            active = idx == selected
+            col = ACCENT if active else ui.GOOD if current_fit[idx] else DIM
+            pygame.draw.circle(self.screen, ui.PANEL_RGB, (sx, sy), 15)
+            pygame.draw.circle(self.screen, col, (sx, sy), 15, 3 if active else 2)
+            marker = self.small.render(str(idx + 1), True, UI)
+            self.screen.blit(marker, marker.get_rect(center=(sx, sy)))
+            self.zones.append((pygame.Rect(sx - 15, sy - 15, 30, 30), "slot", idx))
+        self.text("НАЖМИ УЗЕЛ, ЧТОБЫ ВЫБРАТЬ ОБОРУДОВАНИЕ",
+                  (rect.centerx, rect.bottom - 28), DIM, self.small, center=True)
+
+    def _fitting_impact(self, world, preview, rect, y):
+        """Show the four immediate consequences, not a diagnostics wall."""
+        before = engineering_snapshot(world.player, world.cargo_used)
+        after = engineering_snapshot(preview, world.cargo_used,
+                                     engine_pips=world.player.pips["engines"])
+        rows = (("ЭНЕРГИЯ", "balance_clear", True),
+                ("В ПЕЛЕНЕ", "balance_veil", True),
+                ("МАССА", "total_mass", False),
+                ("СКОРОСТЬ", "speed", True))
+        self.text("ЧТО ИЗМЕНИТСЯ", (rect.x + 17, y), UI, self.small)
+        for i, (label, key, higher) in enumerate(rows):
+            a, b = before[key], after[key]
+            changed = abs(a - b) > 0.05
+            positive = (b > a) == higher
+            color = (ui.GOOD if positive else ui.BAD) if changed else DIM
+            yy = y + 24 + i * 23
+            self.text(label, (rect.x + 17, yy), DIM, self.small)
+            value = f"{a:.0f} → {b:.0f}" if changed else f"{a:.0f} ="
+            self.text(value, (rect.right - 17, yy), color, self.small, right=True)
+
+    def _fitting(self, world, body):
+        """User-first fitting: nodes -> real ship -> selected action.
+
+        Engineering detail moves to V; initial screen only shows a focused
+        decision, with an explicit installation action and preview.
+        """
+        p = world.player
+        slots = p.hull.slots
+        if not slots:
+            self.text("У этого корпуса нет узлов оснащения.", (body.x, body.y), DIM)
+            return
+        self.sel = max(0, min(self.sel, len(slots) - 1))
+        self.slot = max(0, min(self.slot, len(slots) - 1))
+        if self.blueprint_focus:
+            self._btn((body.x - 8, body.y - 2, 245, 28),
+                      "V  ВЕРНУТЬСЯ К СБОРКЕ", "blueprint", ACCENT)
+            diag = pygame.Rect(body.x - 8, body.y + 36, body.w - 306,
+                               body.h - 44)
+            self._hull_layout(p, body, len(slots), focus=True,
+                              rect_override=diag)
+            self._engineering_panel(world, body)
+            return
+
+        left, center, right = fitting_layout_regions(body)
+        ui.panel(self.screen, left, accent=ui.LINE, bg=(*ui.PANEL_RGB, 250))
+        ui.panel(self.screen, right, accent=ui.LINE, bg=(*ui.PANEL_RGB, 250))
+        self.text("УЗЛЫ КОРАБЛЯ", (left.x + 13, left.y + 12), UI, self.small)
+        self.text(f"{len(slots)} СЛОТОВ  ·  W/S", (left.x + 13, left.y + 35),
+                  DIM, self.small)
+        active_index = self.slot if self.picker else self.sel
+        row_h = 30
+        visible = max(1, (left.h - 126) // row_h)
+        first = max(0, min(len(slots) - visible, active_index - visible // 2))
+        for idx in range(first, min(len(slots), first + visible)):
+            slot = slots[idx]
+            key = p.fit[idx]
+            yy = left.y + 70 + (idx - first) * row_h
+            row = pygame.Rect(left.x + 7, yy - 3, left.w - 14, 29)
+            selected = idx == active_index
+            if selected:
+                ui.selection(self.screen, row)
+            elif row.collidepoint(self.mouse):
+                pygame.draw.rect(self.screen, ui.LINE, row, 1)
+            icon_color = ACCENT if selected else ui.GOOD if key else DIM
+            ui.icon(self.screen, ui.MODULE_ICON[slot.category],
+                    (row.x + 15, row.centery), 15, icon_color)
+            text = f"{idx + 1:02d} {CATEGORY_NAME[slot.category]}"
+            limit = row.w - 55
+            while self.small.size(text)[0] > limit and len(text) > 4:
+                text = text[:-1]
+            self.text(text, (row.x + 29, row.y + 6), UI if selected else DIM,
+                      self.small)
+            pygame.draw.circle(self.screen, ui.GOOD if key else ui.LINE,
+                               (row.right - 12, row.centery), 4)
+            self.zones.append((row, "slot", idx))
+        if len(slots) > visible:
+            self.text(f"{first + 1}–{min(first + visible, len(slots))} / {len(slots)}",
+                      (left.x + 13, left.bottom - 88), DIM, self.small)
+        pygame.draw.line(self.screen, ui.LINE, (left.x + 12, left.bottom - 63),
+                         (left.right - 12, left.bottom - 63))
+        self.text("КЛИК — ВЫБРАТЬ", (left.x + 13, left.bottom - 55),
+                  DIM, self.small)
+        self.text("ПКМ — СНЯТЬ", (left.x + 13, left.bottom - 34),
+                  DIM, self.small)
+
+        chosen = None
+        issue = None
+        items = self.picker_items(world) if self.picker else []
+        if self.picker and items:
+            self.pick_sel = max(0, min(self.pick_sel, len(items) - 1))
+            src, key = items[self.pick_sel]
+            chosen = MODULES[key]
+            issue = world.install_problem(self.slot, key,
+                                          from_storage=(src == "storage"))
+        candidate = None
+        if chosen is not None:
+            fit = list(p.fit)
+            fit[self.slot] = chosen.key
+            candidate = Ship(p.hull.key, (0, 0), fit=fit)
+        self._fitting_hero(world, center, candidate.fit if candidate is not None else None)
+
+        selected_slot = slots[active_index]
+        self.text(f"УЗЕЛ {active_index + 1:02d} · {CATEGORY_NAME[selected_slot.category].upper()}",
+                  (right.x + 16, right.y + 12), UI, self.small)
+        self.text(f"РАЗМЕР {SIZE_NAME[selected_slot.size]}  /  "
+                  f"{'ВЫБОР ОБОРУДОВАНИЯ' if self.picker else 'ТЕКУЩЕЕ ОСНАЩЕНИЕ'}",
+                  (right.x + 16, right.y + 36), DIM, self.small)
+        pygame.draw.line(self.screen, ui.LINE, (right.x + 14, right.y + 61),
+                         (right.right - 14, right.y + 61))
+
         if self.picker:
-            items = self.picker_items(world)
-            prow = []
-            for src, key in items:
-                m = MODULES[key]
-                tag = "склад" if src == "storage" else f"{m.price} КК"
-                cur = " (стоит)" if p.fit[self.slot] == key and src == "shop" else ""
-                problem = world.install_problem(self.slot, key, from_storage=(src == "storage"))
-                state = " ×" if problem else ""
-                color = ui.BAD if problem else ACCENT if src == "storage" else UI
-                prow.append((f"{m.name} [{SIZE_NAME[m.size]}] — {tag}{cur}{state}",
-                             color, ui.module_icon_kind(m)))
-            self.text(f"МОДУЛИ · {CATEGORY_NAME[p.hull.slots[self.slot].category]}",
-                      (x, body.y - 2), DIM, self.small)
-            visible = 9
-            first = max(0, min(self.pick_sel - visible + 1, len(prow) - visible))      # прокрутка
-            self._list(prow[first:first + visible], x, body.y + 18, 330, self.pick_sel - first, 22, zone="pick",
-                       first=first)
-            if first > 0:
-                ui.text(self.screen, "▲", (x + 322, body.y + 4), DIM, 14)
-            if first + visible < len(prow):
-                ui.text(self.screen, f"ещё {len(prow) - first - visible} ▼", (x + 330, body.y + 18 + visible * 22),
-                        DIM, 14, anchor="topright")
             if items:
-                key = items[min(self.pick_sel, len(items) - 1)][1]
-                m = MODULES[key]
-                y = body.y + 18 + min(visible, len(prow)) * 22 + 10
-                y = self.wrapped(m.desc, (x, y), 330) + 4
-                for j, line in enumerate(module_stats(m)):
-                    self.text(line, (x, y + j * 18), DIM, self.small)
-                fit = list(p.fit)
-                fit[self.slot] = key
-                preview = Ship(p.hull.key, (0, 0), fit=fit)
-                issue = world.install_problem(self.slot, key, from_storage=(src == "storage"))
-                advisory = engineering_notices(preview, world.cargo_used, DENSE)
-                if advisory:
-                    summary = advisory[0].short + (
-                        f" (+{len(advisory) - 1})" if len(advisory) > 1 else "")
-                    self.text("! " + summary, (x, body.bottom - 83), WARN, self.small)
-                self.text("УСТАНОВКА НЕДОСТУПНА" if issue else "УСТАНОВКА ДОСТУПНА",
-                          (x, body.bottom - 53), ui.BAD if issue else ui.GOOD, self.small)
+                lines = []
+                for src, key in items:
+                    module = MODULES[key]
+                    label = f"{module.name} · {'СКЛАД' if src == 'storage' else str(module.price) + ' КК'}"
+                    problem = world.install_problem(self.slot, key, from_storage=(src == "storage"))
+                    lines.append((label + ("  ×" if problem else ""),
+                                  ui.BAD if problem else ACCENT if src == "storage" else UI,
+                                  ui.module_icon_kind(module)))
+                visible_items = 6
+                begin = max(0, min(self.pick_sel - visible_items + 1,
+                                   len(lines) - visible_items))
+                self._list(lines[begin:begin + visible_items],
+                           right.x + 17, right.y + 80, right.w - 28,
+                           self.pick_sel - begin, 30, zone="pick", first=begin)
+                if len(lines) > visible_items:
+                    self.text(f"{self.pick_sel + 1} / {len(lines)}  ·  W/S",
+                              (right.right - 18, right.y + 267), DIM, self.small, right=True)
+                self._fitting_impact(world, candidate, right, right.y + 282)
+                notices = engineering_notices(candidate, world.cargo_used, DENSE)
+                note = notices[0].short if notices else None
+                yy = right.bottom - 98
                 if issue:
-                    self.wrapped(issue, (x, body.bottom - 33), 330, ui.BAD, self.small)
-        else:
-            key = p.fit[self.sel] if self.sel < len(p.fit) else None
-            if key:
-                m = MODULES[key]
-                self.text(m.name, (x, body.y), ACCENT)
-                y = self.wrapped(m.desc, (x, body.y + 22), 330) + 4
-                for j, line in enumerate(module_stats(m)):
-                    self.text(line, (x, y + j * 18), DIM, self.small)
-                if isinstance(m, WeaponDef) and m.kind == "gun":
-                    slot = p.hull.slots[self.sel]
-                    self.text(f"Установка: сектор {min(slot.arc, m.arc):g}°, направление {slot.facing:+g}°",
-                              (x, y + len(module_stats(m)) * 18), DIM, self.small)
+                    self.text("× УСТАНОВКА НЕДОСТУПНА", (right.x + 16, yy),
+                              ui.BAD, self.small)
+                    self.text(issue[:40], (right.x + 16, yy + 19), ui.BAD, self.small)
+                elif note:
+                    self.text("! " + note[:40], (right.x + 16, yy + 12), WARN, self.small)
+                else:
+                    self.text("✓ МОЖНО УСТАНОВИТЬ", (right.x + 16, yy + 12),
+                              ui.GOOD, self.small)
+                self._btn((right.x + 15, right.bottom - 48, right.w - 30, 35),
+                          "УСТАНОВИТЬ  ·  ENTER", "install",
+                          ACCENT if not issue else ui.LINE, enabled=not issue)
             else:
-                self.text("Enter — выбрать модуль", (x, body.y), DIM)
-        self._hull_layout(p, body, len(rows), preview.fit if preview else None,
-                          focus=self.blueprint_focus)
-        self._engineering_panel(world, body, preview)
+                self.text("Для этого узла нет доступных модулей.",
+                          (right.x + 16, right.y + 89), WARN, self.small)
+            self._btn((right.right - 124, right.y + 4, 109, 24),
+                      "НАЗАД  ·  ESC", "back", DIM)
+        else:
+            key = p.fit[self.sel]
+            if key:
+                module = MODULES[key]
+                self.text(module.name, (right.x + 16, right.y + 86), ACCENT)
+                self.wrapped(module.desc, (right.x + 16, right.y + 124),
+                             right.w - 34, DIM, self.small)
+                for j, line in enumerate(module_stats(module)[:5]):
+                    self.text(line, (right.x + 16, right.y + 217 + j * 24),
+                              UI, self.small)
+            else:
+                self.text("ПУСТОЙ СЛОТ", (right.x + 16, right.y + 92), WARN)
+                self.text("Выберите совместимое оборудование.",
+                          (right.x + 16, right.y + 124), DIM, self.small)
+            self._btn((right.x + 15, right.bottom - 48, right.w - 30, 35),
+                      "ВЫБРАТЬ МОДУЛЬ  ·  ENTER", "choose", ACCENT)
+            if key:
+                self._btn((right.x + 15, right.bottom - 88, right.w - 30, 31),
+                          "СНЯТЬ В СКЛАД  ·  BACKSPACE", "remove", DIM)
 
     def _storage(self, world, body):
         storage = world.captain.storage
