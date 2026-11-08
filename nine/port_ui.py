@@ -251,6 +251,8 @@ class PortUI:
             (f"Очистить налёт филаментов ({C.CLEAN_COST} КК)", world.clean_hull),
             (f"Погасить долг ({cap.debt} КК)" if cap.debt else "Долгов нет", world.pay_debt_action),
             (f"Лечение травмы ({C.MEDICAL_COST} КК)" if cap.trauma else "Капитан здоров", world.heal),
+            (world.contract_label("salt"), lambda: world.contract_action("salt")),
+            (world.contract_label("pirates"), lambda: world.contract_action("pirates")),
         ]
 
     def picker_items(self, world):
