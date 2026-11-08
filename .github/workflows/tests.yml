@@ -98,6 +98,16 @@ jobs:
         with:
           name: naval-rts-ux-shipyard-v2
           path: ux-shipyard-v2.png
+      - name: Render UX 2.2 battle HUD scenes
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ux_hud.py --output ux-hud-v22.png
+      - name: Upload UX 2.2 HUD review
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ux-hud-v22
+          path: ux-hud-v22.png
       - name: Render fitting UI screenshots
         env:
           SDL_VIDEODRIVER: dummy
