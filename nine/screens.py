@@ -577,7 +577,7 @@ class MapScreen(Screen):
                 ui.text(s, label, c + Vector2(9, -2), col, 15, anchor="midleft")
         scout = world.contracts.get("scout")
         if scout and scout["status"] == "active" and not scout["explored"]:
-            target = self.w2m(world.SCOUT_POS)
+            target = self.w2m(world.scout_position())
             radius = max(4, round(world.SCOUT_RADIUS * self.SIZE / C.WORLD_W))
             pygame.draw.circle(s, (110, 220, 205), target, radius, 2)
             ui.text(s, "РАЗВЕДКА", target + Vector2(0, -radius - 5),
@@ -691,7 +691,7 @@ def journal_entries(world):
     for key, state in world.contracts.items():
         if key not in world.CONTRACTS or not isinstance(state, dict):
             continue
-        name, target, reward = world.CONTRACTS[key]
+        name, target, reward = world.contract_terms(key)
         done = state.get("status") == "done"
         if key == "salt":
             current = min(target, int(world.captain.cargo.get("salt", 0)))
