@@ -723,6 +723,10 @@ def journal_entries(world):
             current = min(target, int(world.captain.cargo.get(state["kind"], 0)))
             destination = "Порт беженцев" if state["destination"] == "port" else "Торговая платформа"
             objective = f"Доставить {state['kind']} в {destination}"
+        elif key == "master":
+            current = min(target, int(world.captain.cargo.get("condensate", 0)))
+            destination = "Порт беженцев" if state["hub"] == "port" else "Торговая платформа"
+            objective = f"Мастер: доставить конденсат в {destination}"
         elif key == "guild":
             current = min(target, int(world.captain.cargo.get("salt", 0)))
             destination = "Порт беженцев" if state["hub"] == "port" else "Торговая платформа"
@@ -732,7 +736,7 @@ def journal_entries(world):
         status = "ЗАВЕРШЁН" if done else (
             "МОЖНО СДАТЬ В ПОРТ" if current >= target
             and (key != "urgent" or world.active_port == state["destination"])
-            and (key != "guild" or world.active_port == state["hub"])
+            and (key not in ("guild", "master") or world.active_port == state["hub"])
             else "В РАБОТЕ"
         )
         entries.append((key, name, objective, current, target, reward, status))
@@ -762,9 +766,9 @@ class CaptainsJournal(Screen):
             ui.text(s, "Контрактов пока нет. Возьмите задание в порту.",
                     r.center, ui.DIM, 20, anchor="center")
         for i, (_, name, objective, current, target, reward, status) in enumerate(entries):
-            row_gap = min(90, max(68, (r.h - 150) // max(1, len(entries))))
-            y = r.y + 85 + i * row_gap
-            if y + row_gap - 4 > r.bottom - 35:
+            row_gap = min(90, max(54, (r.h - 170) // max(1, len(entries))))
+            y = r.y + 72 + i * row_gap
+            if y + row_gap - 4 > r.bottom - 85:
                 break
             row = pygame.Rect(r.x + 18, y, r.w - 36, row_gap - 4)
             pygame.draw.rect(s, ui.FAINT, row, 1)
