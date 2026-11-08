@@ -638,6 +638,14 @@ class Hud:
         hints = []
         if world.in_capsule:
             hints.append(("Вы в капсуле. Идите к порту (юго-запад) и нажмите F.", ui.WARN))
+        if p.hp < p.hull.hp * 0.3 and not world.in_capsule:
+            hints.append(("КОРПУС КРИТИЧЕСКИ ПОВРЕЖДЁН", ui.BAD))
+        if p.fires:
+            hints.append((f"ПОЖАР НА КОРАБЛЕ ×{p.fires}", ui.BAD))
+        if p.water > 0.55:
+            hints.append(("ОПАСНОЕ ЗАТОПЛЕНИЕ", ui.BAD))
+        if any(w.overheated for w in p.weapons):
+            hints.append(("ОРУДИЕ ПЕРЕГРЕТО", ui.WARN))
         if world.can_dock():
             hints.append(("[F] Пришвартоваться", ui.ACCENT))
         if world.sheltering_tihodont():
@@ -669,8 +677,18 @@ class Hud:
         # Only two highest-priority actionable signals may occupy the sea.
         # Keep stable order among equal priorities (missiles and brownout
         # beat routine mining and repair notes).
-        hints.sort(key=lambda item: 0 if item[1] == ui.BAD
-                   else 1 if item[1] == ui.WARN else 2)
+        def priority(item):
+            label, color = item
+            if label.startswith("Ракета на подлёте"):
+                return -3
+            if label.startswith("Энергия на нуле"):
+                return -2
+            if label.startswith(("КОРПУС КРИТИЧЕСКИ", "ОПАСНОЕ ЗАТОПЛЕНИЕ",
+                                 "ПОЖАР НА КОРАБЛЕ")):
+                return -1
+            return 0 if color == ui.BAD else 1 if color == ui.WARN else 2
+
+        hints.sort(key=priority)
         chosen = hints[:2]
         self.visible_alerts = [text for text, _ in chosen]
         y = self.h - 78 - 25 * (len(chosen) - 1)
