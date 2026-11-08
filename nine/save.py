@@ -62,6 +62,7 @@ def to_dict(world):
         "codex": world.codex,
         "goals": sorted(world.goals_done),
         "contracts": world.contracts,
+        "guild_reputation": dict(world.guild_reputation),
         "market": {"stock": world.market_stock,
                    "last_time": world.market_last_time},
     }
@@ -106,6 +107,10 @@ def from_dict(d):
     _validate_fit(s["hull"], s["fit"])
     world = World(d["seed"])
     world.t = d["t"]
+    from .reputation import valid_reputation
+    saved_rep = d.get("guild_reputation")
+    if valid_reputation(saved_rep):
+        world.guild_reputation = dict(saved_rep)
     # Legacy saves start from fresh local stocks, without replaying older trips.
     from .market import valid_stocks
     market = d.get("market")
@@ -186,6 +191,13 @@ def from_dict(d):
                             or not 0 <= entry["close_seconds"] <= 100000
                             or type(entry.get("arrived")) is not bool):
                         continue
+                if key == "guild":
+                    if (entry.get("hub") not in ("port", "platform")
+                            or type(entry.get("amount")) is not int
+                            or entry["amount"] != world.GUILD_ORDER_QUANTITY
+                            or type(entry.get("reward")) is not int
+                            or entry["reward"] != 600):
+                        continue
                 if key == "urgent":
                     if (entry.get("origin") not in ("port", "platform")
                             or entry.get("destination") not in ("port", "platform")
@@ -206,6 +218,10 @@ def from_dict(d):
                     world.contracts[key]["cycle"] = cycle
                 if key == "scout":
                     world.contracts[key]["explored"] = entry["explored"]
+                elif key == "guild":
+                    world.contracts[key].update({
+                        name: entry[name] for name in ("hub", "amount", "reward")
+                    })
                 elif key == "urgent":
                     world.contracts[key].update({
                         name: entry[name] for name in (
