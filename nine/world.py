@@ -408,6 +408,12 @@ class World:
             if density > 0.75:
                 self.discover("amnesia")
         self._reveal()
+        mission = self.contracts.get("scout")
+        if (mission and mission["status"] == "active" and not mission["explored"]
+                and not self.in_capsule
+                and p.pos.distance_to(self.SCOUT_POS) <= self.SCOUT_RADIUS):
+            mission["explored"] = True
+            self.say("Район разведан! Вернитесь в порт за наградой.", "good")
         if self.waypoint is not None and p.pos.distance_to(self.waypoint) < 120:
             self.waypoint = None
             self.say("Путевая точка достигнута.")
@@ -826,7 +832,10 @@ class World:
     CONTRACTS = {
         "salt": ("Поставка соль-металла", 10, 250),
         "pirates": ("Охота на рейдеров", 2, 350),
+        "scout": ("Разведка Пелены", 1, 300),
     }
+    SCOUT_POS = (4000.0, 3600.0)
+    SCOUT_RADIUS = 320.0
 
     def contract_label(self, key):
         name, amount, reward = self.CONTRACTS[key]
@@ -837,6 +846,8 @@ class World:
             return f"Контракт: {name} — выполнен"
         if key == "salt":
             progress = min(amount, int(self.captain.cargo.get("salt", 0)))
+        elif key == "scout":
+            progress = int(state["explored"])
         else:
             progress = min(amount, max(0, self.captain.kills - state["start_kills"]))
         return f"Контракт: {name} {progress}/{amount} — сдать в порту"
@@ -848,6 +859,8 @@ class World:
         state = self.contracts.get(key)
         if state is None:
             self.contracts[key] = {"status": "active", "start_kills": self.captain.kills}
+            if key == "scout":
+                self.contracts[key]["explored"] = False
             self.say(f"Принят контракт: {self.CONTRACTS[key][0]}")
             return True
         if state["status"] != "active":
@@ -859,6 +872,9 @@ class World:
             self.captain.cargo["salt"] -= amount
             if self.captain.cargo["salt"] <= 1e-6:
                 del self.captain.cargo["salt"]
+        elif key == "scout":
+            if not state["explored"]:
+                return False
         elif self.captain.kills - state["start_kills"] < amount:
             return False
         state["status"] = "done"

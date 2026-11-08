@@ -152,9 +152,13 @@ def from_dict(d):
                     and entry.get("status") in ("active", "done")
                     and type(entry.get("start_kills")) is int
                     and 0 <= entry["start_kills"] <= cap.kills):
+                if key == "scout" and type(entry.get("explored")) is not bool:
+                    continue
                 world.contracts[key] = {
                     "status": entry["status"], "start_kills": entry["start_kills"]
                 }
+                if key == "scout":
+                    world.contracts[key]["explored"] = entry["explored"]
     # враги и события не сохраняются — после загрузки море спокойное
     world.events.next_spawn = world.t + 45.0
     return world

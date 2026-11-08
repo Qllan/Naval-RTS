@@ -574,6 +574,13 @@ class MapScreen(Screen):
                 _mark_icon(s, m["kind"], c, col)
                 label = m["label"] if m["clarity"] > 0.45 else "???"
                 ui.text(s, label, c + Vector2(9, -2), col, 15, anchor="midleft")
+        scout = world.contracts.get("scout")
+        if scout and scout["status"] == "active" and not scout["explored"]:
+            target = self.w2m(world.SCOUT_POS)
+            radius = max(4, round(world.SCOUT_RADIUS * self.SIZE / C.WORLD_W))
+            pygame.draw.circle(s, (110, 220, 205), target, radius, 2)
+            ui.text(s, "РАЗВЕДКА", target + Vector2(0, -radius - 5),
+                    (150, 240, 220), 15, anchor="midbottom")
         if self.layers["contacts"] and not dead:
             for pi in world.pirates:
                 if world.on_radar(pi.ship.pos) or world.perceives(pi.ship.pos):
