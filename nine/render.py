@@ -147,6 +147,14 @@ class Renderer:
                 ships.append(s)
             elif blip(s.pos):
                 self._blip(s.pos, t)
+        # Civilian traffic has no target lock, damage model or cargo rewards.
+        for trader in world.trade_traffic.snapshot(world.t):
+            if not cam.visible(trader.pos, 50):
+                continue
+            if seen(trader.pos):
+                self._trader_ship(trader, t)
+            elif blip(trader.pos):
+                self._blip(trader.pos, t)
         for ph in world.phantoms:                  # галлюцинации неотличимы от настоящих отметок
             if cam.visible(ph["pos"]):
                 self._blip(ph["pos"], t)
@@ -309,6 +317,31 @@ class Renderer:
                 pygame.draw.circle(self.screen, col, c, max(1, int(cam.px(0.7))))
 
     # --------------------------------------------------------------------
+
+    def _trader_ship(self, trader, t):
+        """Civilian freighter silhouette; no player weapon or pirate AI side."""
+        cam = self.cam
+        center = cam.w2s(trader.pos)
+        length = max(7, cam.px(31))
+        width = max(4, cam.px(12))
+        fwd = Vector2(1, 0).rotate(trader.angle)
+        side = fwd.rotate(90)
+        points = (center + fwd * (length * 0.57),
+                  center + fwd * (length * 0.24) + side * (width * 0.5),
+                  center - fwd * (length * 0.48) + side * (width * 0.5),
+                  center - fwd * (length * 0.48) - side * (width * 0.5),
+                  center + fwd * (length * 0.24) - side * (width * 0.5))
+        pygame.draw.polygon(self.screen, (66, 114, 120), points)
+        pygame.draw.polygon(self.screen, (160, 214, 205), points, 2)
+        for offset in (-length * 0.2, 0, length * 0.18):
+            c = center + fwd * offset
+            pygame.draw.line(self.screen, (171, 141, 83),
+                             c - side * width * 0.35, c + side * width * 0.35,
+                             max(1, round(cam.px(2))))
+        if trader.underway:
+            wake = center - fwd * length * 0.8
+            pygame.draw.line(self.screen, (83, 149, 163), wake,
+                             wake - fwd * length * 0.5, max(1, round(cam.px(1.2))))
 
     def _blip(self, pos, t):
         s = self.cam.w2s(pos)
