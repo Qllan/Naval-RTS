@@ -22,6 +22,7 @@ from .veil import Veil
 from .trade_traffic import TradeTraffic
 from .market import MAX_STOCK, apply_deliveries, new_stocks, unit_price
 from .market_events import current_event, demand_multiplier, latest_news
+from .reputation import (PARTNER_AT, add_reputation, discount, new_reputation, rank)
 
 MODULE_RESALE = 0.5
 HULL_RESALE = 0.5
@@ -113,6 +114,7 @@ class World:
         self.trade_traffic = TradeTraffic(self.port, self.platform, self.islands)
         self.market_stock = new_stocks()
         self.market_last_time = self.t
+        self.guild_reputation = new_reputation()
         self._aground_cd = 0.0
         for _ in range(280):
             self._spawn_node()
@@ -863,6 +865,7 @@ class World:
         "scout": ("Разведка Пелены", 1, 300),
         "escort": ("Сопровождение конвоя", 1, 450),
         "urgent": ("Срочная поставка", 10, 300),
+        "guild": ("Гильдейский заказ", 12, 600),
     }
     SCOUT_POS = (4000.0, 3600.0)
     SCOUT_RADIUS = 320.0
@@ -871,6 +874,16 @@ class World:
 
     URGENT_THRESHOLD = 60
     URGENT_QUANTITY = 10
+    GUILD_ORDER_QUANTITY = 12
+
+    def guild_rank(self, port_key=None):
+        return rank(self.guild_reputation[port_key or self.active_port])
+
+    def service_discount(self, port_key=None):
+        return discount(self.guild_reputation[port_key or self.active_port])
+
+    def guild_order_available(self):
+        return self.guild_reputation[self.active_port] >= PARTNER_AT
 
     def urgent_offer(self):
         """Pick a shortage in the *other* port; don't fabricate demand.
@@ -901,6 +914,11 @@ class World:
             offer = self.contracts.get(key) or self.urgent_offer()
             if offer is not None:
                 return name, offer["amount"], offer["reward"]
+            return name, target, reward
+        if key == "guild":
+            order = self.contracts.get(key)
+            if order is not None:
+                return name, order["amount"], order["reward"]
             return name, target, reward
         state = self.contracts.get(key) or {}
         cycle = state.get("cycle", 0)
@@ -971,6 +989,16 @@ class World:
         if key not in self.CONTRACTS or state is None or state["status"] != "done":
             return False
         cycle = state.get("cycle", 0) + 1
+        if key == "guild":
+            if not self.guild_order_available():
+                return False
+            self.contracts[key] = {
+                "status": "active", "start_kills": self.captain.kills,
+                "cycle": cycle, "hub": self.active_port,
+                "amount": self.GUILD_ORDER_QUANTITY, "reward": 600,
+            }
+            self.say("Новый гильдейский заказ принят.")
+            return True
         if key == "urgent":
             offer = self.urgent_offer()
             if offer is None:
@@ -994,6 +1022,16 @@ class World:
     def contract_label(self, key):
         name, amount, reward = self.contract_terms(key)
         state = self.contracts.get(key)
+        if key == "guild":
+            if state is None:
+                if not self.guild_order_available():
+                    return f"Гильдейский заказ — доступен при репутации {PARTNER_AT}"
+                return f"Гильдейский заказ: соль-металл ×{amount}, награда {reward} КК"
+            if state["status"] == "done":
+                return "Гильдейский заказ выполнен — получить новый"
+            progress = min(amount, int(self.captain.cargo.get("salt", 0)))
+            return (f"Гильдейский заказ ({state['hub']}): соль-металл "
+                    f"{progress}/{amount}, {reward} КК")
         if key == "urgent":
             if state is None:
                 offer = self.urgent_offer()
@@ -1030,6 +1068,16 @@ class World:
             return False
         state = self.contracts.get(key)
         if state is None:
+            if key == "guild":
+                if not self.guild_order_available():
+                    return False
+                self.contracts[key] = {
+                    "status": "active", "start_kills": self.captain.kills,
+                    "cycle": 0, "hub": self.active_port,
+                    "amount": self.GUILD_ORDER_QUANTITY, "reward": 600,
+                }
+                self.say("Принят гильдейский заказ.")
+                return True
             if key == "urgent":
                 offer = self.urgent_offer()
                 if offer is None:
@@ -1062,6 +1110,15 @@ class World:
         elif key == "escort":
             if not state["arrived"]:
                 return False
+        elif key == "guild":
+            if (self.active_port != state["hub"]
+                    or self.captain.cargo.get("salt", 0) + 1e-6 < amount):
+                return False
+            self.captain.cargo["salt"] -= amount
+            if self.captain.cargo["salt"] <= 1e-6:
+                del self.captain.cargo["salt"]
+            self.market_stock[self.active_port]["salt"] = min(
+                MAX_STOCK, self.market_available("salt") + amount)
         elif key == "urgent":
             kind = state["kind"]
             if (self.active_port != state["destination"]
@@ -1076,7 +1133,8 @@ class World:
             return False
         state["status"] = "done"
         self.captain.credits += reward
-        self.say(f"Контракт выполнен: +{reward} КК", "good")
+        gained = add_reputation(self.guild_reputation, self.active_port, key)
+        self.say(f"Контракт выполнен: +{reward} КК, доверие +{gained}", "good")
         return True
 
     # --- порт: сервис -----------------------------------------------------
@@ -1207,7 +1265,7 @@ class World:
         cost = (p.hull.hp - p.hp) * C.REPAIR_COST_PER_HP + (p.armor_max - p.armor) * ARMOR_REPAIR_COST
         cost += sum(1.0 - p.subsystems[k] for k in SUBSYSTEMS) * SUBSYSTEM_REPAIR_COST
         cost += (p.leaks + p.water * 3) * LEAK_REPAIR_COST
-        return int(math.ceil(cost))
+        return int(math.ceil(cost * (1.0 - self.service_discount())))
 
     def repair(self):
         cost = self.repair_cost()
@@ -1221,7 +1279,7 @@ class World:
         p = self.player
         cost = sum((w.defn.ammo - w.ammo) * w.defn.ammo_price for w in p.weapons if w.defn.ammo)
         cost += sum((u.defn.charges - u.charges) * u.defn.charge_price for u in p.utilities if u.defn.charges)
-        return cost
+        return int(math.ceil(cost * (1.0 - self.service_discount())))
 
     def rearm(self):
         cost = self.rearm_cost()
