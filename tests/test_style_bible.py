@@ -54,7 +54,7 @@ def test_lod_is_total_nonoverlapping_and_based_on_screen_size():
 def test_documented_palette_matches_code_exactly():
     doc = DOCUMENT.read_text(encoding="utf-8")
     for name, code in COLOR_HEX.items():
-        assert f"| \`{name}\` | \`{code}\` |" in doc
+        assert f"| `{name}` | `{code}` |" in doc
     assert "N-17" in doc and "M-08" in doc and "B-31" in doc
     assert "Slot.diagram_pos" in doc and "Slot.pos" in doc
 
