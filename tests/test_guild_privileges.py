@@ -89,10 +89,10 @@ def test_guild_trade_rows_are_rank_local_and_clickable():
     w.guild_reputation["port"] = 50
     assert len(ui.trade_items(w)) == 9
     w.guild_reputation["port"] = 75
-    assert len(ui.trade_items(w)) == 10
+    assert len(ui.trade_items(w)) == 11
     ui.sel = 9
     ui.draw(w, 0.4)
-    assert len([z for z in ui.zones if z[1] == "row"]) == 10
+    assert len([z for z in ui.zones if z[1] == "row"]) == 11
     ui.handle_key(pygame.K_RETURN, w)
     assert w.player.guild_hold_upgrade
     w.active_port = "platform"
