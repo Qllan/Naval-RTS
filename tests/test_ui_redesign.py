@@ -85,9 +85,8 @@ def test_r14_real_four_screen_preview_created(tmp_path):
 
 
 
-def test_shipyard_description_never_overprints_price_or_stats():
-    """Long hull descriptions must push the price below their final line."""
-    import pygame
+def test_shipyard_ux_does_not_overlap_description_comparison_price_or_action():
+    """Shipyard's fixed stage sections occupy distinct vertical bands."""
     from nine.hulls import PLAYER_HULLS
 
     pygame.font.init()
@@ -100,29 +99,19 @@ def test_shipyard_description_never_overprints_price_or_stats():
     for index, hull in enumerate(PLAYER_HULLS):
         port.sel = index
         recorded = []
-        wrapped_end = []
-        original_text, original_wrapped = port.text, port.wrapped
+        original = port.text
 
-        def record(text, pos, *args, **kwargs):
-            recorded.append((str(text), pos))
-            return original_text(text, pos, *args, **kwargs)
-
-        def wrap(text, pos, width, *args, **kwargs):
-            bottom = original_wrapped(text, pos, width, *args, **kwargs)
-            if text == hull.desc:
-                wrapped_end.append(bottom)
-            return bottom
+        def record(message, pos, *args, **kwargs):
+            recorded.append((str(message), pos))
+            return original(message, pos, *args, **kwargs)
 
         port.text = record
-        port.wrapped = wrap
         port.draw(world, 0.4)
-        assert wrapped_end, hull.key
-        price = next(pos[1] for text, pos in recorded
-                     if text.startswith("Цена с базовым оснащением"))
-        slot = next(pos[1] for text, pos in recorded if text.startswith("Слоты:"))
-        assert price >= wrapped_end[-1] + 5, hull.key
-        assert slot >= price + 22, hull.key
-        assert any(hull.name in text for text, _ in recorded)
-        # Remove instrumentation before the next hull's draw.
-        port.text, port.wrapped = original_text, original_wrapped
+        port.text = original
+        metric = next(y for text, (x, y) in recorded if text == "СРАВНЕНИЕ С ВАШИМ")
+        price = next(y for text, (x, y) in recorded if text == "К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА")
+        assert price > metric + 130
+        assert any(text == hull.name.upper() for text, _ in recorded)
+        assert any(kind == "row" for _, kind, _ in port.zones)
+        assert any(kind == "button" and name == "leave" for _, kind, name in port.zones)
     ui.Fonts.reset()

@@ -88,6 +88,16 @@ jobs:
         with:
           name: naval-rts-ux-fitting-v2
           path: ux-fitting-v2.png
+      - name: Render UX 2.1 shipyard decisions
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ux_shipyard.py --output ux-shipyard-v2.png
+      - name: Upload UX 2.1 shipyard gallery
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ux-shipyard-v2
+          path: ux-shipyard-v2.png
       - name: Render fitting UI screenshots
         env:
           SDL_VIDEODRIVER: dummy
