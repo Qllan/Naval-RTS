@@ -60,6 +60,7 @@ def to_dict(world):
         "waypoint": [world.waypoint.x, world.waypoint.y] if world.waypoint is not None else None,
         "codex": world.codex,
         "goals": sorted(world.goals_done),
+        "contracts": world.contracts,
     }
 
 
@@ -143,6 +144,17 @@ def from_dict(d):
     world.waypoint = Vector2(d["waypoint"]) if d["waypoint"] else None
     world.codex = dict(d["codex"])
     world.goals_done = set(d["goals"])
+    # Старые сохранения не содержат контрактов; неизвестные id игнорируем.
+    contracts = d.get("contracts", {})
+    if isinstance(contracts, dict):
+        for key, entry in contracts.items():
+            if (key in world.CONTRACTS and isinstance(entry, dict)
+                    and entry.get("status") in ("active", "done")
+                    and type(entry.get("start_kills")) is int
+                    and 0 <= entry["start_kills"] <= cap.kills):
+                world.contracts[key] = {
+                    "status": entry["status"], "start_kills": entry["start_kills"]
+                }
     # враги и события не сохраняются — после загрузки море спокойное
     world.events.next_spawn = world.t + 45.0
     return world
