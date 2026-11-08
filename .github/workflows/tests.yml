@@ -68,6 +68,16 @@ jobs:
         with:
           name: naval-rts-ocean-veil-r13
           path: ocean-veil-r13.png
+      - name: Render R1.4 real HUD / shipyard / fitting screenshots
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_interface.py --output ui-r14.png
+      - name: Upload R1.4 interface review
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ui-r14
+          path: ui-r14.png
       - name: Render fitting UI screenshots
         env:
           SDL_VIDEODRIVER: dummy
