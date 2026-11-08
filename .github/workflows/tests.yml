@@ -78,6 +78,16 @@ jobs:
         with:
           name: naval-rts-ui-r14
           path: ui-r14.png
+      - name: Render UX 2.0 ship-first fitting flow
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ux_fitting.py --output ux-fitting-v2.png
+      - name: Upload UX 2.0 fitting flow
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ux-fitting-v2
+          path: ux-fitting-v2.png
       - name: Render fitting UI screenshots
         env:
           SDL_VIDEODRIVER: dummy
