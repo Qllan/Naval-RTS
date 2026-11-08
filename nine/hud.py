@@ -96,6 +96,24 @@ class Hud:
                          if self.virtual else None)
         self.w, self.h = self.screen.get_size()
         self.minimap_bg = self._build_minimap(world)
+        self.show_help = False
+        self.help_until = 12.0
+        self._ghost = {}           # «призрак» недавнего значения шкалы — видно, сколько сняли
+        self._last = {}
+        self._popups = []
+        self._flash_until = {}
+        self._incoming = []
+        self.buttons = []          # [(rect, action)] — кликабельные зоны, пересобираются каждый кадр
+        self.panels = []           # прямоугольники панелей: клик по ним не стреляет
+        self.minimap_rect = None
+        self.hints = True
+        self.show_minimap = True
+        self.show_log = True
+        self.keys = None           # Settings — чтобы подсказки показывали назначенные клавиши
+        self._fog = None
+        self._fog_t = -1.0
+        self.focus = "cruise"
+        self.visible_alerts = []  # labels actually shown this frame
 
     def to_display(self, pos):
         """Logical HUD point -> physical screen position."""
@@ -118,24 +136,7 @@ class Hud:
         end = self.to_display(rect.bottomright)
         return pygame.Rect(start, (max(1, end[0] - start[0]),
                                    max(1, end[1] - start[1])))
-        self.show_help = False
-        self.help_until = 12.0
-        self._ghost = {}           # «призрак» недавнего значения шкалы — видно, сколько сняли
-        self._last = {}
-        self._popups = []
-        self._flash_until = {}
-        self._incoming = []
-        self.buttons = []          # [(rect, action)] — кликабельные зоны, пересобираются каждый кадр
-        self.panels = []           # прямоугольники панелей: клик по ним не стреляет
-        self.minimap_rect = None
-        self.hints = True
-        self.show_minimap = True
-        self.show_log = True
-        self.keys = None           # Settings — чтобы подсказки показывали назначенные клавиши
-        self._fog = None
-        self._fog_t = -1.0
-        self.focus = "cruise"
-        self.visible_alerts = []  # labels actually shown this frame
+
 
     # --------------------------------------------------------------------
 
