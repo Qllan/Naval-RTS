@@ -105,7 +105,8 @@ def test_new_hulls_have_distinct_functional_deck_details(key):
     visual = hull.visual
     assert visual is not None
     assert visual.details
-    allowed = {"sensor_rail", "cargo_cell", "armor_plate", "radiator"}
+    allowed = {"sensor_rail", "cargo_cell", "armor_plate", "radiator",
+               "spine_channel", "shoulder_guard", "service_hatch"}
     from nine.gfx.ship_art import half_width
     for detail in visual.details:
         assert detail.kind in allowed
@@ -533,3 +534,87 @@ def test_engineering_risk_preview_does_not_purchase_module():
     assert (tuple(world.player.fit), tuple(world.captain.storage),
             world.captain.credits) == before
     assert any(kind == "pick" for _,kind,_ in port.zones)
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_r11_visual_profile_is_separate_from_gameplay_geometry(key):
+    from nine.gfx.ship_art import half_width, outline
+
+    hull = HULLS[key]
+    visual = hull.visual
+    assert visual is not None and len(visual.render_profile) >= 9
+    profile = visual.render_profile
+    assert profile[0] == (max(x for x, _ in hull.shape), 0)
+    assert profile[-1] == (min(x for x, _ in hull.shape), 0)
+    assert all(profile[i][0] > profile[i + 1][0] for i in range(len(profile) - 1))
+    assert all(y >= 0 for x, y in profile)
+    assert len(outline(key)) >= 16
+    assert tuple(hull.shape) == {
+        "needle": ((30, 0), (20, 3), (4, 5), (-17, 5), (-28, 2),
+                   (-30, 0), (-28, -2), (-17, -5), (4, -5), (20, -3)),
+        "manta": ((27, 0), (17, 9), (5, 14), (-18, 13), (-28, 7),
+                  (-29, 0), (-28, -7), (-18, -13), (5, -14), (17, -9)),
+        "bastion": ((35, 0), (27, 8), (13, 13), (-23, 14), (-34, 8),
+                    (-36, 0), (-34, -8), (-23, -14), (13, -13), (27, -8)),
+    }[key]
+    for slot in hull.slots:
+        if slot.category == "weapon":
+            x, y = slot.pos
+            assert abs(y) <= half_width(key, x) + 0.5
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_r11_new_citadels_and_service_details_are_functional(key):
+    from nine.gfx.ship_art import superstructures
+
+    visual = HULLS[key].visual
+    kinds = {d.kind for d in visual.details}
+    assert {"spine_channel", "shoulder_guard", "service_hatch"} <= kinds
+    assert len(superstructures(key)) >= 2
+
+
+def test_r11_palette_is_style_bible_for_new_hulls_but_not_legacy():
+    from nine.gfx.palette import SHIP_PALETTES
+    from nine.gfx.ship_art import industrial_palette
+    from nine.gfx.style_tokens import rgb
+
+    approved = industrial_palette("player")
+    pirate = industrial_palette("pirate")
+    assert approved.hull == rgb("steel_hull")
+    assert approved.deck == rgb("steel_deck")
+    assert approved.armor == rgb("steel_armor")
+    assert approved.accent == rgb("signal_friendly")
+    assert pirate.accent == rgb("signal_pirate")
+    assert SHIP_PALETTES["player"].hull != approved.hull
+
+
+@pytest.mark.parametrize("key", NEW_HULLS)
+def test_r11_lod_switches_at_screen_space_thresholds(key):
+    import pygame
+    from nine.gfx.camera import Camera
+    from nine.gfx.ship_art import ShipArt, hull_length
+    from nine.gfx.style_tokens import lod_for_length
+
+    background = (8, 25, 35)
+    canvas = pygame.Surface((180, 180))
+    cam = Camera(180, 180, zoom=0.2)
+    cam.snap((0, 0))
+    art = ShipArt()
+    ship = Ship(key, (0, 0), -90)
+
+    for target_length, expected in ((18, "far"), (48, "tactical"), (110, "inspection")):
+        cam.zoom = target_length / hull_length(key)
+        canvas.fill(background)
+        assert lod_for_length(hull_length(key) * cam.zoom) == expected
+        art.draw(canvas, cam, ship, "player", shadow=None)
+        assert canvas.get_at((90, 90))[:3] != background
+        if expected != "inspection":
+            assert not art.masters
+        else:
+            assert art.masters
+
+
+def test_r11_three_hull_master_sprites_have_distinct_pixels():
+    import pygame
+    images = [build_hull(key, "player", (), 0)[0] for key in NEW_HULLS]
+    assert len({(img.get_size(), pygame.image.tostring(img, "RGBA")) for img in images}) == 3

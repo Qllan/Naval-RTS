@@ -24,7 +24,8 @@ class Slot:
 class DeckDetail:
     """Элемент художественной палубы; координаты в единицах корпуса.
 
-    kind: sensor_rail | cargo_cell | armor_plate | radiator
+    kind: sensor_rail | cargo_cell | armor_plate | radiator |
+          spine_channel | shoulder_guard | service_hatch
     size: длина по оси нос-корма и поперечная ширина.
     """
     kind: str
@@ -40,6 +41,7 @@ class HullVisual:
     deck_ribs: tuple = ()        # x поперечных швов
     deck_strips: tuple = ()      # доля полуширины продольных швов
     details: tuple = ()          # отличительные технические элементы на палубе
+    render_profile: tuple = ()   # художественный полупрофиль (нос +X, y>=0); физику не меняет
 
 
 @dataclass(frozen=True)
@@ -147,14 +149,21 @@ _ALL = [
         default_fit=("autocannon_s", None, "engine_s2", "reactor_s2", "shield_s",
                      None, "sensor_s", None, None),
         series="Верфи «Северный контур»", visual_style="industrial_sci_fi",
-        visual=HullVisual(superstructures=((-5, 0, 10, 5.5, True),),
-                          mast=(-6, 0), deck_ribs=(-23, -14, -5, 4, 13, 22),
-                          deck_strips=(0.33,),
-                          details=(
-                              DeckDetail("sensor_rail", (6, -2.6), (10, 1.2)),
-                              DeckDetail("sensor_rail", (6, 2.6), (10, 1.2)),
-                              DeckDetail("radiator", (-23, 0), (6, 2.8)),
-                          )),
+        visual=HullVisual(
+            render_profile=((30, 0), (25, 1.35), (19, 3.2), (10, 4.1), (3, 4.8),
+                            (-12, 4.8), (-19, 4.3), (-25, 2.8), (-28, 1.8), (-30, 0)),
+            superstructures=((-5, 0, 10, 5.5, True), (5, 0, 5.6, 3.0, False)),
+            mast=(-6, 0), deck_ribs=(-23, -14, -5, 4, 13, 22),
+            deck_strips=(0.33,),
+            details=(
+                DeckDetail("spine_channel", (0, 0), (29, 1.6)),
+                DeckDetail("shoulder_guard", (-5, -3.4), (9, 1.2)),
+                DeckDetail("shoulder_guard", (-5, 3.4), (9, 1.2)),
+                DeckDetail("sensor_rail", (6, -2.6), (10, 1.2)),
+                DeckDetail("sensor_rail", (6, 2.6), (10, 1.2)),
+                DeckDetail("service_hatch", (-16, 0), (3.4, 2.4)),
+                DeckDetail("radiator", (-23, 0), (6, 2.8)),
+            )),
         desc="Узкий индустриальный корпус с открытыми универсальными узлами. "
              "Подходит для разных лёгких сборок без обязательной роли.",
     ),
@@ -173,14 +182,22 @@ _ALL = [
         default_fit=("cannon_m", None, "autocannon_s", "engine_m", "reactor_m",
                      "shield_m", "armor_s", "sensor_s", "cargo_ext", None),
         series="Промышленная серия «Атлас»", visual_style="industrial_sci_fi",
-        visual=HullVisual(superstructures=((-8, 0, 11, 10, True),),
-                          mast=(-8, 0), deck_ribs=(-23, -12, -1, 10, 21),
-                          deck_strips=(0.29, 0.65),
-                          details=(
-                              DeckDetail("cargo_cell", (5, 0), (11, 9)),
-                              DeckDetail("cargo_cell", (-19, -7), (8, 3.5)),
-                              DeckDetail("cargo_cell", (-19, 7), (8, 3.5)),
-                          )),
+        visual=HullVisual(
+            render_profile=((27, 0), (20, 5.6), (16, 9.1), (8, 12.4),
+                            (3, 14), (-4, 13.8), (-13, 13.3),
+                            (-21, 11.1), (-27, 7), (-29, 0)),
+            superstructures=((-8, 0, 11, 10, True), (0, 0, 6, 5.6, False)),
+            mast=(-8, 0), deck_ribs=(-23, -12, -1, 10, 21),
+            deck_strips=(0.29, 0.65),
+            details=(
+                DeckDetail("spine_channel", (-2, 0), (24, 2.2)),
+                DeckDetail("shoulder_guard", (-8, -11), (14, 1.6)),
+                DeckDetail("shoulder_guard", (-8, 11), (14, 1.6)),
+                DeckDetail("cargo_cell", (5, 0), (11, 9)),
+                DeckDetail("cargo_cell", (-19, -7), (8, 3.5)),
+                DeckDetail("cargo_cell", (-19, 7), (8, 3.5)),
+                DeckDetail("service_hatch", (17, 0), (4.5, 4.0)),
+            )),
         desc="Широкая модульная палуба: выбор между артиллерией, перевозками "
              "и вспомогательным оборудованием.",
     ),
@@ -201,17 +218,26 @@ _ALL = [
                      "engine_m", "reactor_m", "shield_m", "armor_m", "sensor_s",
                      None, None),
         series="Конструкторское бюро «Рубеж»", visual_style="industrial_sci_fi",
-        visual=HullVisual(superstructures=((-5, 0, 15, 10, True),
-                                         (-17, 0, 6, 7, False)),
-                          mast=(-5, 0), deck_ribs=(-30, -20, -10, 0, 10, 20, 30),
-                          deck_strips=(0.38, 0.72),
-                          details=(
-                              DeckDetail("armor_plate", (10, -8.5), (9, 4)),
-                              DeckDetail("armor_plate", (10, 8.5), (9, 4)),
-                              DeckDetail("armor_plate", (-10, -8.5), (9, 4)),
-                              DeckDetail("armor_plate", (-10, 8.5), (9, 4)),
-                              DeckDetail("radiator", (-30, 0), (6, 4)),
-                          )),
+        visual=HullVisual(
+            render_profile=((35, 0), (31, 3.7), (26, 8.3), (17, 11.3),
+                            (10, 13), (-9, 13.5), (-21, 14),
+                            (-28, 11), (-33, 8), (-36, 0)),
+            superstructures=((-5, 0, 15, 10, True),
+                             (-17, 0, 6, 7, False),
+                             (7, 0, 8, 7, False)),
+            mast=(-5, 0), deck_ribs=(-30, -20, -10, 0, 10, 20, 30),
+            deck_strips=(0.38, 0.72),
+            details=(
+                DeckDetail("spine_channel", (0, 0), (36, 2.8)),
+                DeckDetail("shoulder_guard", (-9, -12), (12, 1.8)),
+                DeckDetail("shoulder_guard", (-9, 12), (12, 1.8)),
+                DeckDetail("armor_plate", (10, -8.5), (9, 4)),
+                DeckDetail("armor_plate", (10, 8.5), (9, 4)),
+                DeckDetail("armor_plate", (-10, -8.5), (9, 4)),
+                DeckDetail("armor_plate", (-10, 8.5), (9, 4)),
+                DeckDetail("service_hatch", (27, 0), (3.8, 3.2)),
+                DeckDetail("radiator", (-30, 0), (6, 4)),
+            )),
         desc="Тяжёлая силовая рама с разнесёнными башнями. Оружие и защиту "
              "можно заменить поддерживающими системами.",
     ),

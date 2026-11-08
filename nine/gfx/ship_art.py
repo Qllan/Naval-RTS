@@ -7,12 +7,14 @@
 import math
 import random
 from collections import OrderedDict
+from functools import lru_cache
 
 import pygame
 from pygame.math import Vector2
 
 from ..hulls import HULLS
-from .palette import SHIP_PALETTES, mix, shade
+from .palette import SHIP_PALETTES, ShipPalette, mix, shade
+from .style_tokens import lod_for_length, rgb
 
 R = 6                    # пикселей на единицу в мастер-спрайте
 ANGLE_STEP = 2.0         # шаг кэша по углу, град
@@ -39,7 +41,28 @@ def _profile_from_shape(shape):
 
 
 for _key, _definition in HULLS.items():
-    PROFILES.setdefault(_key, _profile_from_shape(_definition.shape))
+    visual = _definition.visual
+    if visual is not None and visual.render_profile:
+        PROFILES.setdefault(_key, list(visual.render_profile))
+    else:
+        PROFILES.setdefault(_key, _profile_from_shape(_definition.shape))
+
+
+@lru_cache(maxsize=3)
+def industrial_palette(pal_key):
+    """Approved R1.0 metal palette for the three R1.1 industrial hulls.
+
+    Legacy ship palettes stay untouched. The faction marking remains
+    distinct from technical cyan and never recolors the entire hull.
+    """
+    signal = "signal_pirate" if pal_key == "pirate" else "signal_friendly"
+    return ShipPalette(
+        hull=rgb("steel_hull"), deck=rgb("steel_deck"),
+        plank=rgb("steel_seam"), trim=rgb("steel_shadow"),
+        superstructure=rgb("steel_roof"), roof=rgb("steel_edge"),
+        window=rgb("signal_window"), accent=rgb(signal),
+        turret=rgb("steel_armor"), armor=rgb("steel_armor"),
+    )
 
 
 # Надстройки: (x, y, длина, ширина, окна спереди)
@@ -169,6 +192,36 @@ def _industrial_details(cv, visual, pal):
                 cv.line((xx, y - width * 0.37),
                         (xx, y + width * 0.37),
                         shade(pal.superstructure, 0.6), 0.22)
+        elif detail.kind == "spine_channel":
+            # Dark keel-service trench with two narrow reinforced shoulders.
+            cv.rect(x + 0.25, y + 0.25, length, width + 1.1,
+                    (0, 0, 0, 70), radius=0.12)
+            cv.rect(x, y, length, width + 0.8, shade(pal.deck, 0.58), radius=0.15)
+            for side in (-1, 1):
+                cv.line((x - length * 0.48, y + side * width * 0.5),
+                        (x + length * 0.48, y + side * width * 0.5),
+                        shade(pal.superstructure, 0.85), 0.22)
+            cv.line((x - length * 0.4, y), (x + length * 0.4, y),
+                    shade(pal.trim, 1.3), 0.16)
+        elif detail.kind == "shoulder_guard":
+            # Real layered armor with a cast shadow, a bright beveled edge
+            # and one service joint rather than randomized decoration.
+            cv.rect(x + 0.35, y + 0.35, length, width, (0, 0, 0, 75), radius=0.16)
+            cv.rect(x, y, length, width, pal.armor, radius=0.12)
+            cv.line((x - length * 0.45, y - width * 0.32),
+                    (x + length * 0.42, y - width * 0.32),
+                    shade(pal.armor, 1.36), 0.17)
+            cv.line((x, y - width * 0.38), (x, y + width * 0.38),
+                    shade(pal.trim, 1.35), 0.14)
+        elif detail.kind == "service_hatch":
+            # Tactile access panel; the warm dot signifies maintenance.
+            cv.rect(x + 0.28, y + 0.28, length, width, (0, 0, 0, 68), radius=0.18)
+            cv.rect(x, y, length, width, shade(pal.roof, 0.72), radius=0.16)
+            cv.rect(x, y, length - 0.6, width - 0.6,
+                    shade(pal.superstructure, 0.65), width=0.12, radius=0.1)
+            cv.circle(x - length * 0.28, y, 0.22, rgb("signal_amber"))
+            cv.line((x, y - width * 0.25), (x, y + width * 0.25),
+                    shade(pal.trim, 1.5), 0.16)
         else:
             raise ValueError(f"Unknown deck detail: {detail.kind}")
 
@@ -199,7 +252,8 @@ def _blocked(hull_key, x, y, pad=3.5):
 
 def build_hull(hull_key, pal_key, static_modules, damage_level):
     """Мастер-спрайт корпуса со статичными модулями и следами повреждений."""
-    pal = SHIP_PALETTES[pal_key]
+    industrial = HULLS[hull_key].visual_style == "industrial_sci_fi"
+    pal = industrial_palette(pal_key) if industrial else SHIP_PALETTES[pal_key]
     pts = outline(hull_key)
     extent = max(max(abs(x), abs(y)) for x, y in pts) + 10
     cv = _Canvas(extent)
@@ -210,8 +264,6 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     rng = random.Random(f"{hull_key}:{pal_key}") if HULLS[hull_key].visual is not None else (
         random.Random(hash((hull_key, pal_key)) & 0xffffff))
     pirate = pal_key == "pirate"
-    industrial = HULLS[hull_key].visual_style == "industrial_sci_fi"
-
     # --- борт: ватерлиния (сурик), обшивка, затенение правого борта
     cv.poly(pts, (37, 55, 63) if industrial else (116, 42, 36) if not pirate else (92, 44, 30))
     inner = _scaled(pts, 0.985, 0.94)
@@ -557,41 +609,63 @@ def build_turret(module_key, pal_key):
 
 
 
-# При дальнем масштабе тонкие палубные элементы исчезают после уменьшения:
-# компактный силуэт сохраняет обводку, направление носа и оружейные узлы.
-COMPACT_ZOOM = 1.0
-
-
-def draw_compact_hull(screen, cam, ship, pal_key):
-    """Читаемый на расстоянии корабль; только визуал, без игровой логики."""
-    pal = SHIP_PALETTES[pal_key]
-    pts = [cam.w2s(ship.pos + Vector2(x, y).rotate(ship.angle))
-           for x, y in ship.hull.shape]
+def draw_compact_hull(screen, cam, ship, pal_key, tier="tactical"):
+    """Far/tactical vector LODs selected by screen-space silhouette length."""
+    pal = industrial_palette(pal_key)
+    geom = outline(ship.hull.key)
+    pts = [cam.w2s(ship.pos + Vector2(x, y).rotate(ship.angle)) for x, y in geom]
     if len(pts) < 3:
         return
-    # Светлая обводка отделяет корпус от океана; внутренние цвета наследуют сторону.
-    pygame.draw.polygon(screen, shade(pal.trim, 0.65), pts)
-    inner = [cam.w2s(ship.pos + Vector2(x * 0.91, y * 0.86).rotate(ship.angle))
-             for x, y in ship.hull.shape]
+    pygame.draw.polygon(screen, pal.trim, pts)
+    inner = [cam.w2s(ship.pos + Vector2(x * 0.96, y * 0.92).rotate(ship.angle))
+             for x, y in geom]
     pygame.draw.polygon(screen, pal.hull, inner)
-    pygame.draw.aalines(screen, shade(pal.superstructure, 1.08), True, pts)
-    # Продольная конструктивная ось + заметное обозначение носа.
-    forward = Vector2(1, 0).rotate(ship.angle)
-    stern = min(x for x, _ in ship.hull.shape)
-    bow = max(x for x, _ in ship.hull.shape)
-    a = cam.w2s(ship.pos + forward * (stern * 0.60))
-    b = cam.w2s(ship.pos + forward * (bow * 0.67))
-    pygame.draw.line(screen, shade(pal.deck, 1.1), a, b, 1)
-    tip = cam.w2s(ship.pos + forward * (bow * 0.79))
-    pygame.draw.circle(screen, pal.accent, tip, 2)
+    pygame.draw.aalines(screen, shade(pal.superstructure, 0.87), True, pts)
 
-    # При самом дальнем приближении достаточно показать занятые узлы.
-    # Детальные башни и эффекты вращения остаются на обычном масштабе.
+    bow, stern = PROFILES[ship.hull.key][0][0], PROFILES[ship.hull.key][-1][0]
+    forward = Vector2(1, 0).rotate(ship.angle)
+    tip = cam.w2s(ship.pos + forward * (bow * 0.8))
+    if tier == "far":
+        # No turret clutter on silhouettes under 24 pixels.
+        pygame.draw.circle(screen, pal.accent, tip, 1)
+        return
+
+    # Primary raised deck, with real outline-dependent side shoulders.
+    def point(x, y):
+        return cam.w2s(ship.pos + Vector2(x, y).rotate(ship.angle))
+
+    pygame.draw.line(screen, shade(pal.deck, 1.1),
+                     point(stern * 0.56, 0), point(bow * 0.62, 0), 2)
+    for x, y, length, width, _ in superstructures(ship.hull.key):
+        corners = ((x - length * 0.5, y - width * 0.5),
+                   (x + length * 0.5, y - width * 0.5),
+                   (x + length * 0.5, y + width * 0.5),
+                   (x - length * 0.5, y + width * 0.5))
+        pygame.draw.polygon(screen, pal.superstructure,
+                            [point(px, py) for px, py in corners])
+    # A few identity-bearing side elements remain at tactical zoom.
+    if ship.hull.key == "needle":
+        for side in (-1, 1):
+            pygame.draw.line(screen, pal.armor, point(-12, side * 3.6),
+                             point(7, side * 3.6), 1)
+    elif ship.hull.key == "manta":
+        for side in (-1, 1):
+            pygame.draw.line(screen, shade(pal.armor, 1.18),
+                             point(-22, side * 9.4), point(5, side * 11.6), 2)
+    elif ship.hull.key == "bastion":
+        for side in (-1, 1):
+            pygame.draw.line(screen, shade(pal.armor, 1.15),
+                             point(-23, side * 10), point(18, side * 9.2), 3)
+    pygame.draw.circle(screen, pal.accent, tip, 2)
+    # At tactical size weapon stations are functional silhouettes, not
+    # detailed rotating sprite images. Far LOD omits them entirely.
     for weapon in ship.weapons:
-        pygame.draw.circle(screen, pal.turret, cam.w2s(weapon.world_pos(ship)),
-                           2 if weapon.defn.size > 1 else 1)
+        pos = cam.w2s(weapon.world_pos(ship))
+        radius = 3 if weapon.defn.size > 1 else 2
+        pygame.draw.circle(screen, shade(pal.trim, 1.4), pos, radius + 1)
+        pygame.draw.circle(screen, pal.turret, pos, radius)
     if ship.hp < ship.hull.hp * 0.35:
-        pygame.draw.circle(screen, (204, 111, 78), cam.w2s(ship.pos), 2)
+        pygame.draw.circle(screen, rgb("signal_amber"), cam.w2s(ship.pos), 2)
 
 # --- кэш и отрисовка ------------------------------------------------------
 
@@ -644,9 +718,11 @@ class ShipArt:
 
     def draw(self, screen, cam, ship, pal_key, t=0.0, alpha=255, shadow=Vector2(3, 4)):
         """shadow — смещение тени в пикселях (по солнцу); None — без тени (ночь)."""
-        if ship.hull.visual_style == "industrial_sci_fi" and cam.zoom <= COMPACT_ZOOM and alpha == 255:
-            draw_compact_hull(screen, cam, ship, pal_key)
-            return
+        if ship.hull.visual_style == "industrial_sci_fi" and alpha == 255:
+            tier = lod_for_length(hull_length(ship.hull.key) * cam.zoom)
+            if tier != "inspection":
+                draw_compact_hull(screen, cam, ship, pal_key, tier=tier)
+                return
         key, (hull_img, shadow_img) = self._hull_master(ship, pal_key)
         center = cam.w2s(ship.pos)
         if shadow is not None:

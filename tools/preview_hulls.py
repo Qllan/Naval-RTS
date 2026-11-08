@@ -21,9 +21,9 @@ from nine.ship import Ship
 
 
 MODELS = (
-    ("needle", "N-17  /  NEEDLE", "Sensor rails  ·  slim patrol frame"),
-    ("manta", "M-08  /  MANTA", "Cargo cells  ·  broad utility deck"),
-    ("bastion", "B-31  /  BASTION", "Armor plates  ·  reinforced battleship"),
+    ("needle", "N-17  /  NEEDLE", "Narrow keel spine  /  double sensor rails"),
+    ("manta", "M-08  /  MANTA", "Broad shoulders  /  independent cargo bays"),
+    ("bastion", "B-31  /  BASTION", "Segmented side armor  /  reinforced citadel"),
 )
 BACKGROUND = (13, 26, 35)
 PANEL = (20, 36, 45)
@@ -41,9 +41,9 @@ def render(output):
         heading = pygame.font.Font(None, 44)
         label = pygame.font.Font(None, 36)
         small = pygame.font.Font(None, 25)
-        text = heading.render("NAVAL-RTS  /  HULL DESIGN STUDY R0.4", True, MAIN)
+        text = heading.render("NAVAL-RTS  /  VISUAL REDESIGN R1.1", True, MAIN)
         surface.blit(text, (52, 38))
-        sub = small.render("Three constructions, one modular fitting system", True, MUTED)
+        sub = small.render("Approved industrial steel, distinct top-down frames, three screen-space LODs", True, MUTED)
         surface.blit(sub, (55, 87))
 
         for i, (key, name, tagline) in enumerate(MODELS):
@@ -91,21 +91,25 @@ def render(output):
             x = 38 + i * 493
             pygame.draw.rect(surface, PANEL, (x, 790, 466, 226), border_radius=10)
             pygame.draw.rect(surface, EDGE, (x, 790, 466, 226), 1, border_radius=10)
-            surface.blit(small.render("GAME SCALE / DISTANT vs STANDARD", True, MAIN),
+            surface.blit(small.render("DISTANCE-BASED LOD  /  FAR - TACTICAL - INSPECT", True, MAIN),
                          (x + 20, 808))
-            for column, zoom in enumerate((0.55, 1.75)):
-                stage = pygame.Surface((210, 150))
+            from nine.gfx.style_tokens import lod_for_length
+            from nine.gfx.ship_art import hull_length
+            for column, zoom in enumerate((0.30, 0.80, 1.75)):
+                stage = pygame.Surface((134, 147))
                 stage.fill(BACKGROUND)
                 cam = Camera(stage.get_width(), stage.get_height(), zoom=zoom)
                 cam.snap((0, 0))
                 art.draw(stage, cam, Ship(key, (0, 0), -90), "player", shadow=None)
-                dest = (x + 17 + column * 224, 846)
+                dest = (x + 17 + column * 144, 846)
                 surface.blit(stage, dest)
-                pygame.draw.rect(surface, EDGE, (*dest, 210, 150), 1)
-                surface.blit(small.render(f"{zoom:.2f}x", True, MUTED),
-                             (dest[0] + 8, dest[1] + 7))
+                pygame.draw.rect(surface, EDGE, (*dest, 134, 147), 1)
+                size = hull_length(key) * zoom
+                desc = f"{lod_for_length(size).upper()}  {size:.0f}px"
+                surface.blit(small.render(desc, True, MUTED),
+                             (dest[0] + 5, dest[1] + 7))
 
-        surface.blit(small.render("Preview only  ·  rendered by the game code, including compact LOD",
+        surface.blit(small.render("Game renderer reference  ·  physical hulls / slot positions unchanged",
                                   True, MUTED), (50, 1033))
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
