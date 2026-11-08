@@ -150,3 +150,45 @@ def test_resp_review_contains_real_varied_resolution_screenshots(tmp_path):
     sizes = [pygame.image.load(str(f)).get_size() for f in results]
     assert sizes == [(1024, 768), (1600, 900), (1024, 768), (1600, 900)]
     assert all(f.stat().st_size > 20000 for f in results)
+
+
+
+@pytest.mark.parametrize("size", [(1600, 900), (1920, 1080), (1440, 900)])
+def test_large_window_hud_scales_its_entire_ui_and_click_zones(size):
+    screen, world = staged(size, hull="bastion")
+    hud = Hud(screen, world)
+    hud.help_until = 0
+    hud.draw(world, False, mouse=(-100, -100))
+    assert hud.virtual
+    status = hud.panels[0]
+    assert status.w >= 330 * min(size[0] / 1280, size[1] / 720) - 2
+    assert screen.get_rect().contains(status)
+    assert hud.minimap_rect is not None
+    assert screen.get_rect().contains(hud.minimap_rect)
+    assert hud.over_ui(hud.minimap_rect.center)
+    assert not hud.over_ui((size[0] // 2, size[1] // 2))
+    for system in ("shields", "engines", "weapons"):
+        rect = next(rect for rect, action in hud.buttons if action == ("pip", system))
+        assert hud.action_at(rect.center) == ("pip", system)
+        assert screen.get_rect().contains(rect)
+    assert hud._overlay.get_size() == hud.viewport.size
+
+
+def test_hud_large_text_and_colorblind_controls_keep_real_hitboxes():
+    screen, world = staged((1600, 900), hull="bastion")
+    try:
+        ui.configure(large_font=True, colorblind=True)
+        hud = Hud(screen, world)
+        hud.help_until = 0
+        hud.draw(world, False, mouse=(-100, -100))
+        assert hud.virtual
+        assert ui.Fonts.get(18).get_height() >= 16
+        assert ui.BAD == (240, 120, 30)
+        assert hud.action_at(next(r.center for r, action in hud.buttons
+                                  if action == ("pip", "engines"))) == ("pip", "engines")
+        # A virtual HUD must not falsely block clicks in empty sea.
+        assert not hud.over_ui((screen.get_width() // 2,
+                                screen.get_height() // 2))
+    finally:
+        ui.configure(large_font=False, colorblind=False)
+        ui.Fonts.reset()
