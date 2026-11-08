@@ -58,6 +58,16 @@ jobs:
         with:
           name: naval-rts-module-fit-r12
           path: module-fit-r12.png
+      - name: Render real R1.3 ocean and Veil scenes
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ocean.py --output ocean-veil-r13.png
+      - name: Upload R1.3 ocean / Veil preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ocean-veil-r13
+          path: ocean-veil-r13.png
       - name: Render fitting UI screenshots
         env:
           SDL_VIDEODRIVER: dummy
