@@ -858,9 +858,9 @@ class World:
             return False
         state = self.contracts.get(key)
         if state is None:
-            self.contracts[key] = {
-                "status": "active", "start_kills": self.captain.kills, "explored": False
-            }
+            self.contracts[key] = {"status": "active", "start_kills": self.captain.kills}
+            if key == "scout":
+                self.contracts[key]["explored"] = False
             self.say(f"Принят контракт: {self.CONTRACTS[key][0]}")
             return True
         if state["status"] != "active":
