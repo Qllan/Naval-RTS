@@ -88,6 +88,36 @@ def weapon_arc_points(center, facing, arc, radius):
     return points
 
 
+def shipyard_layout_regions(body):
+    """Catalogue / dominant ship viewport / purchase decision, non-overlapping."""
+    body = pygame.Rect(body)
+    gutter = 9
+    catalogue_w = max(184, round(body.w * 0.205))
+    offer_w = max(295, round(body.w * 0.308))
+    catalogue = pygame.Rect(body.x - 8, body.y, catalogue_w, body.h - 6)
+    hero = pygame.Rect(catalogue.right + gutter, body.y,
+                       body.w - catalogue_w - offer_w - gutter * 2,
+                       body.h - 6)
+    offer = pygame.Rect(hero.right + gutter, body.y, offer_w, body.h - 6)
+    return catalogue, hero, offer
+
+
+def hull_purchase_issue(world, hull):
+    """Match World.buy_hull guards without mutating the player or money."""
+    if hull.key == world.player.hull.key:
+        return "УЖЕ В ВАШЕМ ФЛОТЕ"
+    if not hull.purchasable:
+        return "КОРПУС НЕДОСТУПЕН"
+    if world.captain.debt > 0:
+        return "ПОГАСИТЕ ДОЛГ"
+    _, cost = world.hull_offer(hull.key)
+    if world.captain.credits < cost:
+        return f"НЕ ХВАТАЕТ {cost - world.captain.credits} КК"
+    if world.cargo_used > Ship(hull.key, (0, 0)).cargo_capacity:
+        return "ГРУЗ НЕ ПОМЕСТИТСЯ"
+    return None
+
+
 def shipyard_window(total, selected, page_size=8):
     """Видимое окно каталога; selected всегда в нём при валидном индексе."""
     if total <= 0:
@@ -280,7 +310,8 @@ class PortUI:
                 if z and z[0] in ("row", "slot", "pick", "tab", "button"):
                     self.sound("ui_hover")
                 if z and z[0] in ("row", "slot") and not self.picker:
-                    self.sel = z[1]
+                    if z[0] != "row" or TABS[self.tab] != "Верфь":
+                        self.sel = z[1]
                 elif z and z[0] == "pick":
                     self.pick_sel = z[1]
         elif e.type == pygame.MOUSEWHEEL:
@@ -309,7 +340,12 @@ class PortUI:
                 return self._button(idx, world)
             elif kind == "row":
                 self.sel = idx
-                self._activate(world)
+                # In the shipyard a catalogue click is selection only.
+                # Purchase happens on the explicit button (or Enter).
+                if TABS[self.tab] != "Верфь":
+                    self._activate(world)
+                else:
+                    self.sound("ui_click")
             elif kind == "slot":
                 # Clicking a ship node selects equipment; it never buys it.
                 # Purchase/install is an explicit CTA (or keyboard Enter).
@@ -349,6 +385,10 @@ class PortUI:
         return None
 
     def _button(self, name, world):
+        if name == "purchase_hull" and TABS[self.tab] == "Верфь":
+            if PLAYER_HULLS and hull_purchase_issue(world, PLAYER_HULLS[self.sel]) is None:
+                self._activate(world)
+            return None
         if name == "blueprint" and TABS[self.tab] == "Оснащение":
             self.blueprint_focus = not self.blueprint_focus
             self.sound("ui_click")
@@ -786,53 +826,136 @@ class PortUI:
         self._stats(world, body.right - 300, body.y)
 
     def _shipyard(self, world, body):
-        # Ограничиваем число строк: каталог может состоять из десятков корпусов.
-        # При перемещении мышью/клавиатурой выбор остаётся видимым.
+        """UX 2.0: see the ship first, compare, then explicitly purchase.
+
+        The catalogue no longer buys on click. All values come from the
+        existing hull_offer/ship_summary and buy_hull game rules.
+        """
         if not PLAYER_HULLS:
             self.text("Нет доступных корпусов", (body.x, body.y), DIM)
             return
         self.sel = max(0, min(self.sel, len(PLAYER_HULLS) - 1))
-        page_size = max(1, min(8, (body.h - 160) // 26))
+        rail, hero, offer = shipyard_layout_regions(body)
+        ui.panel(self.screen, rail, accent=ui.LINE, bg=(*ui.PANEL_RGB, 250))
+        ui.panel(self.screen, hero, accent=ui.LINE, bg=(*ui.PANEL_RGB, 250))
+        ui.panel(self.screen, offer, accent=ui.LINE, bg=(*ui.PANEL_RGB, 250))
+
+        self.text("КАТАЛОГ КОРПУСОВ", (rail.x + 12, rail.y + 12), UI, self.small)
+        self.text("ВЫБЕРИТЕ КОРАБЛЬ", (rail.x + 12, rail.y + 34), DIM, self.small)
+        page_size = max(1, (rail.h - 102) // 40)
         first, end = shipyard_window(len(PLAYER_HULLS), self.sel, page_size)
-        rows = []
-        for h in PLAYER_HULLS[first:end]:
-            full, cost = world.hull_offer(h.key)
-            mark = "  (ваш)" if h.key == world.player.hull.key else ""
-            rows.append((f"{h.name:<18} {cost:>6} КК{mark}", ACCENT if mark else UI))
-        self._list(rows, body.x, body.y, 360, self.sel - first, 26, first=first)
-        y_footer = body.y + len(rows) * 26 + 5
-        self.text(f"Корпуса {first + 1}–{end} из {len(PLAYER_HULLS)} · W/S или колесо",
-                  (body.x, y_footer), DIM, self.small)
-        h = PLAYER_HULLS[self.sel]
-        full, cost = world.hull_offer(h.key)
-        # Витрина сохраняет достаточную высоту независимо от размера каталога.
-        top = y_footer + 26
-        show = pygame.Rect(body.x - 8, top, 360, max(95, body.bottom - top))
-        ui.panel(self.screen, show, "ВИТРИНА / КОРПУС", ui.LINE,
-                 bg=(*ui.PANEL_RGB, 255))
-        self._showcase(Ship(h.key, (0, 0), -90), show, world.t)
-        x, y = body.x + 390, body.y
-        self.text(h.name, (x, y), ACCENT, self.big)
-        self.text(h.series or h.role, (x, y + 30), DIM)
-        desc_bottom = self.wrapped(h.desc, (x, y + 52), 600)
-        price_y = desc_bottom + 7
-        self.text(f"Цена с базовым оснащением {full} КК, со сдачей текущего корпуса {cost} КК",
-                  (x, price_y), UI, self.small)
-        slots = {}
-        for s in h.slots:
-            slots.setdefault(s.category, []).append(SIZE_NAME[s.size])
-        line = ", ".join(f"{CATEGORY_NAME[c]} {'/'.join(v)}" for c, v in slots.items())
-        slots_y = price_y + 24
-        self.text("Слоты: " + line, (x, slots_y), DIM, self.small)
-        preview = Ship(h.key, (0, 0))
-        # Flexible description height + 2 columns keep the comparison
-        # inside the viewport even when the hull has a long specification.
-        self._stats(world, x, slots_y + 30, preview, columns=2)
+        for row_num, i in enumerate(range(first, end)):
+            hull = PLAYER_HULLS[i]
+            _, cost = world.hull_offer(hull.key)
+            own = hull.key == world.player.hull.key
+            selected = i == self.sel
+            row = pygame.Rect(rail.x + 7, rail.y + 65 + row_num * 40,
+                              rail.w - 14, 37)
+            if selected:
+                ui.selection(self.screen, row)
+            elif row.collidepoint(self.mouse):
+                pygame.draw.rect(self.screen, ui.LINE, row, 1)
+            label = hull.name
+            while self.small.size(label)[0] > row.w - 16 and len(label) > 4:
+                label = label[:-2] + "…"
+            self.text(label, (row.x + 7, row.y + 2),
+                      ACCENT if selected else UI, self.small)
+            price = "ВАШ КОРАБЛЬ" if own else f"{cost:,} КК"
+            self.text(price, (row.x + 7, row.y + 19),
+                      ui.GOOD if own else DIM, self.small)
+            self.zones.append((row, "row", i))
+        self.text(f"{first + 1}–{end} / {len(PLAYER_HULLS)}  ·  W/S",
+                  (rail.x + 11, rail.bottom - 24), DIM, self.small)
+
+        hull = PLAYER_HULLS[self.sel]
+        full, cost = world.hull_offer(hull.key)
+        preview = Ship(hull.key, (0, 0), -90)
+        self.text("КОРПУС / ВИД СВЕРХУ", (hero.x + 17, hero.y + 13), UI, self.small)
+        self.text(hull.name.upper(), (hero.x + 17, hero.y + 39), ACCENT, self.font)
+        pygame.draw.line(self.screen, ui.LINE,
+                         (hero.x + 15, hero.y + 70), (hero.right - 15, hero.y + 70))
+        mid_x = hero.centerx
+        for k in (-2, -1, 0, 1, 2):
+            xx = mid_x + k * 56
+            pygame.draw.line(self.screen, ui.FAINT, (xx, hero.y + 88),
+                             (xx, hero.bottom - 55))
+        stage = pygame.Rect(hero.x + 12, hero.y + 84, hero.w - 24, hero.h - 142)
+        self._showcase(preview, stage, world.t)
+        pygame.draw.line(self.screen, ui.LINE,
+                         (hero.x + 15, hero.bottom - 52),
+                         (hero.right - 15, hero.bottom - 52))
+        self.text(f"{len([s for s in hull.slots if s.category == 'weapon'])} ОРУЖЕЙНЫХ УЗЛА   ·   "
+                  f"{len(hull.slots)} МОДУЛЬНЫХ СЛОТОВ",
+                  (hero.centerx, hero.bottom - 43), DIM, self.small, center=True)
+        self.text("ИГРОВАЯ МОДЕЛЬ  ·  НОС ВВЕРХ",
+                  (hero.centerx, hero.bottom - 22), DIM, self.small, center=True)
+
+        # The right panel answers "is this ship better for me?" rather
+        # than exposing the entire 13-row spreadsheet.
+        self.text("ПАСПОРТ КОРАБЛЯ", (offer.x + 15, offer.y + 12), UI, self.small)
+        series = hull.series or hull.role
+        self.text(series[:39], (offer.x + 15, offer.y + 39), DIM, self.small)
+        self._shipyard_blurb(hull.desc, offer.x + 15, offer.y + 72,
+                            offer.w - 30, 4)
+        self.text("СРАВНЕНИЕ С ВАШИМ", (offer.x + 15, offer.y + 159),
+                  UI, self.small)
+        a = {name: (value, better) for name, value, better in
+             ship_summary(world.player, world.cargo_used)}
+        b = {name: value for name, value, _ in ship_summary(preview, world.cargo_used)}
+        for i, name in enumerate(("Корпус", "Броня", "Щит", "Скорость", "Урон/с")):
+            value, higher = a[name]
+            change = b[name]
+            improved = (change > value) == higher
+            same = abs(change - value) < 0.51
+            color = DIM if same else ui.GOOD if improved else ui.BAD
+            yy = offer.y + 187 + i * 26
+            self.text(name.upper(), (offer.x + 15, yy), DIM, self.small)
+            result = f"{value:.0f} → {change:.0f}" if not same else f"{change:.0f} ="
+            self.text(result, (offer.right - 16, yy),
+                      color, self.small, right=True)
+        pygame.draw.line(self.screen, ui.LINE,
+                         (offer.x + 15, offer.y + 327),
+                         (offer.right - 15, offer.y + 327))
+        self.text("К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА", (offer.x + 15, offer.y + 340),
+                  DIM, self.small)
+        self.text(f"{cost:,} КК", (offer.x + 15, offer.y + 361), UI, self.big)
+        issue = hull_purchase_issue(world, hull)
+        if issue is not None:
+            self.text(issue, (offer.x + 15, offer.bottom - 82), WARN, self.small)
+        else:
+            self.text("ГОТОВ К ПОКУПКЕ", (offer.x + 15, offer.bottom - 82),
+                      ui.GOOD, self.small)
+        self._btn((offer.x + 14, offer.bottom - 55, offer.w - 28, 39),
+                  "КУПИТЬ КОРПУС  ·  ENTER" if issue is None else "ПОКУПКА НЕДОСТУПНА",
+                  "purchase_hull", ACCENT if issue is None else ui.LINE,
+                  enabled=issue is None)
+
+    def _shipyard_blurb(self, text, x, y, width, max_lines=4):
+        """Short readable description; never overlaps the comparison metrics."""
+        words = text.split()
+        lines, current = [], ""
+        for word in words:
+            proposed = f"{current} {word}".strip()
+            if current and self.small.size(proposed)[0] > width:
+                lines.append(current)
+                current = word
+            else:
+                current = proposed
+        if current:
+            lines.append(current)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            final = lines[-1]
+            while final and self.small.size(final + "…")[0] > width:
+                final = final[:-1]
+            lines[-1] = final + "…"
+        for i, line in enumerate(lines):
+            self.text(line, (x, y + i * 19), DIM, self.small)
 
     def _showcase(self, ship, rect, t):
         from .gfx.camera import Camera
         from .gfx.ship_art import hull_length
-        zoom = min(4.2, (rect.h - 50) / hull_length(ship.hull.key))
+        zoom = min(5.0, (rect.h - 16) / hull_length(ship.hull.key))
         cam = Camera(self.w, self.h, zoom)
         target = pygame.Vector2(rect.centerx, rect.centery + 10)
         cam.center = pygame.Vector2((self.w / 2 - target.x) / zoom, (self.h / 2 - target.y) / zoom)
