@@ -22,7 +22,8 @@ from .veil import Veil
 from .trade_traffic import TradeTraffic
 from .market import MAX_STOCK, apply_deliveries, new_stocks, unit_price
 from .market_events import current_event, demand_multiplier, latest_news
-from .reputation import (PARTNER_AT, add_reputation, discount, new_reputation, rank)
+from .reputation import (PARTNER_AT, MASTER_AT, add_reputation, discount,
+                         new_reputation, rank, next_rank)
 
 MODULE_RESALE = 0.5
 HULL_RESALE = 0.5
@@ -866,6 +867,7 @@ class World:
         "escort": ("Сопровождение конвоя", 1, 450),
         "urgent": ("Срочная поставка", 10, 300),
         "guild": ("Гильдейский заказ", 12, 600),
+        "master": ("Мастерский заказ", 18, 900),
     }
     SCOUT_POS = (4000.0, 3600.0)
     SCOUT_RADIUS = 320.0
@@ -875,6 +877,7 @@ class World:
     URGENT_THRESHOLD = 60
     URGENT_QUANTITY = 10
     GUILD_ORDER_QUANTITY = 12
+    MASTER_ORDER_QUANTITY = 18
 
     def guild_rank(self, port_key=None):
         return rank(self.guild_reputation[port_key or self.active_port])
@@ -884,6 +887,14 @@ class World:
 
     def guild_order_available(self):
         return self.guild_reputation[self.active_port] >= PARTNER_AT
+
+    def master_order_available(self):
+        return self.guild_reputation[self.active_port] >= MASTER_AT
+
+    def guild_progress(self, port_key=None):
+        points = self.guild_reputation[port_key or self.active_port]
+        target, name = next_rank(points)
+        return points, target, name
 
     def urgent_offer(self):
         """Pick a shortage in the *other* port; don't fabricate demand.
@@ -915,7 +926,7 @@ class World:
             if offer is not None:
                 return name, offer["amount"], offer["reward"]
             return name, target, reward
-        if key == "guild":
+        if key in ("guild", "master"):
             order = self.contracts.get(key)
             if order is not None:
                 return name, order["amount"], order["reward"]
@@ -989,6 +1000,16 @@ class World:
         if key not in self.CONTRACTS or state is None or state["status"] != "done":
             return False
         cycle = state.get("cycle", 0) + 1
+        if key == "master":
+            if not self.master_order_available():
+                return False
+            self.contracts[key] = {
+                "status": "active", "start_kills": self.captain.kills,
+                "cycle": cycle, "hub": self.active_port,
+                "amount": self.MASTER_ORDER_QUANTITY, "reward": 900,
+            }
+            self.say("Новый мастерский заказ гильдии принят.")
+            return True
         if key == "guild":
             if not self.guild_order_available():
                 return False
@@ -1022,6 +1043,16 @@ class World:
     def contract_label(self, key):
         name, amount, reward = self.contract_terms(key)
         state = self.contracts.get(key)
+        if key == "master":
+            if state is None:
+                if not self.master_order_available():
+                    return f"Мастерский заказ — доступен при репутации {MASTER_AT}"
+                return f"Мастерский заказ: конденсат ×{amount}, награда {reward} КК"
+            if state["status"] == "done":
+                return "Мастерский заказ выполнен — взять следующий"
+            progress = min(amount, int(self.captain.cargo.get("condensate", 0)))
+            return (f"Мастерский заказ ({state['hub']}): конденсат "
+                    f"{progress}/{amount}, {reward} КК")
         if key == "guild":
             if state is None:
                 if not self.guild_order_available():
@@ -1068,6 +1099,16 @@ class World:
             return False
         state = self.contracts.get(key)
         if state is None:
+            if key == "master":
+                if not self.master_order_available():
+                    return False
+                self.contracts[key] = {
+                    "status": "active", "start_kills": self.captain.kills,
+                    "cycle": 0, "hub": self.active_port,
+                    "amount": self.MASTER_ORDER_QUANTITY, "reward": 900,
+                }
+                self.say("Принят мастерский заказ гильдии.")
+                return True
             if key == "guild":
                 if not self.guild_order_available():
                     return False
@@ -1110,6 +1151,15 @@ class World:
         elif key == "escort":
             if not state["arrived"]:
                 return False
+        elif key == "master":
+            if (self.active_port != state["hub"]
+                    or self.captain.cargo.get("condensate", 0) + 1e-6 < amount):
+                return False
+            self.captain.cargo["condensate"] -= amount
+            if self.captain.cargo["condensate"] <= 1e-6:
+                del self.captain.cargo["condensate"]
+            self.market_stock[self.active_port]["condensate"] = min(
+                MAX_STOCK, self.market_available("condensate") + amount)
         elif key == "guild":
             if (self.active_port != state["hub"]
                     or self.captain.cargo.get("salt", 0) + 1e-6 < amount):
