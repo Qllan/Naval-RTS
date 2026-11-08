@@ -771,6 +771,8 @@ class CaptainsJournal(Screen):
             progress = "Выполнено" if status == "ЗАВЕРШЁН" else f"{current}/{target}"
             ui.text(s, f"Прогресс: {progress}    Награда: {reward} КК",
                     (row.x + 14, row.y + 48), ui.TEXT, 15)
+        ui.text(s, self.game.world.market_bulletin(),
+                (r.x + 22, r.bottom - 63), ui.ACCENT, 15)
         ui.text(s, "J / Esc — закрыть. Награду можно получить в порту.",
                 (r.centerx, r.bottom - 23), ui.DIM, 16, anchor="midtop")
 
