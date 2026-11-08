@@ -71,6 +71,7 @@ class Captain:
     ammo_stock: dict = field(default_factory=lambda: {"ap": 0, "he": 0})
     pending_insurance: int = 0
     kills: int = 0
+    guild_certificates: int = 0
 
 
 class World:
@@ -1183,8 +1184,12 @@ class World:
             return False
         state["status"] = "done"
         self.captain.credits += reward
+        if key == "master":
+            self.captain.guild_certificates = min(
+                9999, self.captain.guild_certificates + 1)
         gained = add_reputation(self.guild_reputation, self.active_port, key)
-        self.say(f"Контракт выполнен: +{reward} КК, доверие +{gained}", "good")
+        extra = ", сертификат гильдии +1" if key == "master" else ""
+        self.say(f"Контракт выполнен: +{reward} КК, доверие +{gained}{extra}", "good")
         return True
 
     # --- порт: сервис -----------------------------------------------------
@@ -1255,6 +1260,19 @@ class World:
 
     GUILD_GOODS_AT = 50
     GUILD_GOODS_QUANTITY = 5
+    GUILD_REWARD_MODULE = "guild_hold_mk2"
+
+    def redeem_guild_certificate(self):
+        """Trade one earned certificate for a non-retail storage module."""
+        if (self.guild_reputation[self.active_port] < self.GUILD_HOLD_AT
+                or self.captain.guild_certificates < 1
+                or self.captain.debt > 0):
+            return False
+        self.captain.guild_certificates -= 1
+        self.captain.storage.append(self.GUILD_REWARD_MODULE)
+        self.discover(f"module:{self.GUILD_REWARD_MODULE}")
+        return True
+
     GUILD_HOLD_COST = 650
     GUILD_HOLD_AT = 75
 
@@ -1461,7 +1479,9 @@ class World:
 
     def compatible(self, slot_index):
         slot = self.player.hull.slots[slot_index]
-        return [m for m in MODULES.values() if m.category == slot.category and m.size <= slot.size]
+        return [m for m in MODULES.values()
+                if m.key != self.GUILD_REWARD_MODULE
+                and m.category == slot.category and m.size <= slot.size]
 
     def install_problem(self, slot_index, key, from_storage=False):
         """Проверка установки без каких-либо изменений денег, склада или корабля.
@@ -1476,6 +1496,8 @@ class World:
         if from_storage and key not in cap.storage:
             return "Нет на складе"
         if not from_storage:
+            if key == self.GUILD_REWARD_MODULE:
+                return "Гильдейский модуль получают только за сертификат"
             if cap.debt > 0:
                 return "Должникам не продают"
             if cap.credits < m.price:
@@ -1524,7 +1546,7 @@ class World:
 
     def sell_from_storage(self, key):
         cap = self.captain
-        if key not in cap.storage:
+        if key not in cap.storage or key == self.GUILD_REWARD_MODULE:
             return 0
         cap.storage.remove(key)
         price = int(MODULES[key].price * MODULE_RESALE)
