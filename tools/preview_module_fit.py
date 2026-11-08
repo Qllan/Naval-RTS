@@ -96,7 +96,7 @@ def render(output):
             a, b = variants(key)
             imgs = (ship_image(a), ship_image(b))
             # Identical world scale in both columns of a row.
-            scale = min(2.3, 352 / max(img.get_height() for img in imgs),
+            scale = min(2.3, 316 / max(img.get_height() for img in imgs),
                         615 / max(img.get_width() for img in imgs))
             top = 126 + row * 440
             for col, (ship, image) in enumerate(zip((a, b), imgs)):
@@ -109,7 +109,7 @@ def render(output):
                                           True, TEXT), (left + 20, top + 14))
                 w, h = max(1, round(image.get_width() * scale)), max(1, round(image.get_height() * scale))
                 scaled = pygame.transform.smoothscale(image, (w, h))
-                surface.blit(scaled, scaled.get_rect(center=(left + 432, top + 210)))
+                surface.blit(scaled, scaled.get_rect(center=(left + 432, top + 192)))
                 pygame.draw.line(surface, BORDER, (left + 22, top + 366),
                                  (left + 842, top + 366))
                 line = (VARIANTS[key]["description"] if col else

@@ -99,3 +99,22 @@ def test_r12_review_sheet_is_generated_from_live_renderer(tmp_path):
     assert output.exists() and output.stat().st_size > 10000
     image = pygame.image.load(str(output))
     assert image.get_size() == (1800, 1470)
+
+
+
+def test_r12_hull_master_cache_is_bounded_when_many_refits_are_previewed():
+    from nine.gfx.ship_art import MASTER_CACHE_LIMIT
+    from collections import OrderedDict
+
+    renderer = ShipArt()
+    ship = Ship("bastion", (0, 0))
+    assert isinstance(renderer.masters, OrderedDict)
+    # LRU entries from earlier refits: no expensive extra sprite builds.
+    for i in range(MASTER_CACHE_LIMIT):
+        renderer.masters[("stale", i)] = (None, None)
+    key, _ = renderer._hull_master(ship, "player")
+    assert key in renderer.masters
+    assert len(renderer.masters) == MASTER_CACHE_LIMIT
+    assert ("stale", 0) not in renderer.masters
+    renderer._hull_master(ship, "player")
+    assert len(renderer.masters) == MASTER_CACHE_LIMIT

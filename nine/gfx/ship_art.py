@@ -20,6 +20,7 @@ R = 6                    # пикселей на единицу в мастер-
 ANGLE_STEP = 2.0         # шаг кэша по углу, град
 ZOOM_STEP = 0.05
 CACHE_LIMIT = 5000
+MASTER_CACHE_LIMIT = 24  # Bound large R=6 hull surfaces across repeated refits
 
 # Полупрофили корпусов (нос → корма, y ≥ 0); зеркалятся на левый борт
 PROFILES = {
@@ -840,7 +841,7 @@ def draw_compact_hull(screen, cam, ship, pal_key, tier="tactical"):
 
 class ShipArt:
     def __init__(self):
-        self.masters = {}
+        self.masters = OrderedDict()
         self.turrets = {}
         self.cache = OrderedDict()
 
@@ -865,6 +866,10 @@ class ShipArt:
         m = self.masters.get(key)
         if m is None:
             m = self.masters[key] = build_hull(ship.hull.key, pal_key, static, dmg)
+            if len(self.masters) > MASTER_CACHE_LIMIT:
+                self.masters.popitem(last=False)
+        else:
+            self.masters.move_to_end(key)
         return key, m
 
     def wreck_pieces(self, ship, pal_key):
