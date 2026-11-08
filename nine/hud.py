@@ -296,7 +296,8 @@ class Hud:
     def _edge_markers(self, world, cam):
         """Стрелки у края экрана: порт, путевая точка, контакты радара, сигнатуры событий."""
         p = world.player
-        marks = [(world.port, ui.ACCENT, "Порт")]
+        marks = [(world.port, ui.ACCENT, "Порт"),
+                 (world.platform, ui.C_ENERGY, "Торговля")]
         if getattr(world, "waypoint", None) is not None:
             marks.append((world.waypoint, ui.C_ENERGY, "Точка"))
         radar = world.radar_range()
@@ -565,11 +566,14 @@ class Hud:
             pygame.draw.polygon(s, (240, 220, 120), [wp + Vector2(0, -4), wp + Vector2(4, 0), wp + Vector2(0, 4),
                                                      wp + Vector2(-4, 0)])
         pygame.draw.circle(s, ui.ACCENT, m(world.port), 4, 1)
+        pygame.draw.rect(s, ui.C_ENERGY, pygame.Rect(m(world.platform)[0] - 3,
+                                                       m(world.platform)[1] - 3, 7, 7), 1)
         pygame.draw.circle(s, (240, 240, 250), m(world.eye), 3)
         pygame.draw.circle(s, rgb("veil_fringe"), m(world.eye),
                            int(C.EYE_WALL_R / C.WORLD_W * n), 1)
         ui.text(s, "Око", (m(world.eye)[0] - 8, m(world.eye)[1] + 6), ui.DIM, 14, anchor="topright")
         ui.text(s, "Порт", (m(world.port)[0] + 7, m(world.port)[1] - 6), ui.DIM, 14)
+        ui.text(s, "Торг.", (m(world.platform)[0] + 6, m(world.platform)[1] - 6), ui.DIM, 14)
         p = world.player
         pp = Vector2(m(p.pos))
         pygame.draw.circle(s, (40, 110, 100), pp, max(2, int(world.radar_range() / C.WORLD_W * n)), 1)
