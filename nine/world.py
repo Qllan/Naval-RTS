@@ -17,6 +17,7 @@ from .hulls import HULLS
 from .islands import AGROUND_MIN_SPEED, avoid_turn, collide_ship, generate_islands, island_at
 from .modules import AMMO, AMMO_ORDER, MODULES
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship, fit_problems
+from .spatial import ShipCollisionGrid, ship_overlaps
 from .veil import Veil
 
 MODULE_RESALE = 0.5
@@ -700,6 +701,10 @@ class World:
     def _update_projectiles(self, dt):
         p = self.player
         keep = []
+        # Broad phase is shared by all player projectiles this frame.
+        # NPC positions are already updated; dead ships remain indexed but
+        # are ignored by the exact live check, preserving hit order.
+        target_grid = ShipCollisionGrid(x.ship for x in self.pirates) if self.projectiles else None
         for pr in self.projectiles:
             update_projectile(pr, dt, self.density_at(pr.pos), self.rng)
             if island_at(self.islands, pr.pos):                 # снаряд разбился о скалы
@@ -708,12 +713,11 @@ class World:
                 else:
                     self.emit("rock", Vector2(pr.pos))
                 continue
-            targets = [x.ship for x in self.pirates] if pr.side == "player" else [p]
-            hit = None
-            for ship in targets:
-                if ship.alive and ship.pos.distance_to(pr.pos) < ship.radius + (4 if pr.kind != "shell" else 0):
-                    hit = ship
-                    break
+            padding = 4 if pr.kind != "shell" else 0
+            if pr.side == "player":
+                hit = target_grid.first_hit(pr.pos, padding)
+            else:
+                hit = p if ship_overlaps(p, pr.pos, padding) else None
             if hit is not None:
                 fires, leaks = hit.fires, hit.leaks
                 armor, hp, shield = hit.armor, hit.hp, hit.shield
