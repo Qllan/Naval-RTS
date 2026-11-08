@@ -47,8 +47,7 @@ def test_port_visual_buttons_are_clickable_at_physical_screen_coordinates(size):
     port.draw(world, 0.4)
     for rect, category, index in port.zones:
         location = port.to_display(rect.center)
-        assert port.to_logical(location) in rect or rect.inflate(2, 2).collidepoint(
-            port.to_logical(location))
+        assert rect.inflate(2, 2).collidepoint(port.to_logical(location))
     initial = world.captain.credits
     row = next(rect for rect, kind, idx in port.zones
                if kind == "row" and PLAYER_HULLS[idx].key == "needle")
