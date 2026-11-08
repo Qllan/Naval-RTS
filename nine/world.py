@@ -356,6 +356,7 @@ class World:
         self.smokes = [s for s in self.smokes if s.life > 0]
 
         self._update_memory(dt, density)
+        self._update_escort_contract(dt)
         if self.god:
             p.hp = p.hull.hp
             p.fires = p.leaks = 0
@@ -855,6 +856,7 @@ class World:
         "salt": ("Поставка соль-металла", 10, 250),
         "pirates": ("Охота на рейдеров", 2, 350),
         "scout": ("Разведка Пелены", 1, 300),
+        "escort": ("Сопровождение конвоя", 1, 450),
     }
     SCOUT_POS = (4000.0, 3600.0)
     SCOUT_RADIUS = 320.0
@@ -876,6 +878,8 @@ class World:
                 reward = 170 * target
             elif key == "scout":
                 reward = rng.choice((280, 320, 375, 420))
+            elif key == "escort":
+                reward = rng.choice((420, 480, 540, 600))
         return name, target, reward
 
     def scout_position(self):
@@ -886,6 +890,44 @@ class World:
             return Vector2(self.SCOUT_POS)
         rng = random.Random(f"{self.seed}:scout-position:{cycle}")
         return Vector2(self.SCOUT_ZONES[1 + rng.randrange(len(self.SCOUT_ZONES) - 1)])
+
+    ESCORT_RADIUS = 240.0
+    ESCORT_REQUIRED_SECONDS = 15.0
+    ESCORT_ARRIVAL_RADIUS = 450.0
+
+    def _new_escort_state(self, cycle):
+        """Choose the convoy and the port it must depart from."""
+        return {
+            "status": "active", "start_kills": self.captain.kills,
+            "cycle": cycle, "origin": self.active_port,
+            "convoy": cycle % 2, "leg": -1,
+            "close_seconds": 0.0, "arrived": False,
+        }
+
+    def _update_escort_contract(self, dt):
+        state = self.contracts.get("escort")
+        if not state or state["status"] != "active" or state["arrived"]:
+            return
+        if self.in_capsule or dt <= 0:
+            return
+        index = state["convoy"]
+        # TradeTraffic reports the current scheduled leg (or docked stop).
+        leg, direction, moving = self.trade_traffic.leg(index, self.t)
+        expected = 1 if state["origin"] == "port" else -1
+        merchant = self.trade_traffic.snapshot(self.t)[index]
+        if moving and direction == expected:
+            if state["leg"] != leg:
+                state["leg"] = leg
+                state["close_seconds"] = 0.0
+            if self.player.pos.distance_to(merchant.pos) <= self.ESCORT_RADIUS:
+                state["close_seconds"] += dt
+        elif (not moving and state["leg"] >= 0
+              and leg == state["leg"] and direction == expected
+              and state["close_seconds"] >= self.ESCORT_REQUIRED_SECONDS):
+            destination = self.platform if expected == 1 else self.port
+            if self.player.pos.distance_to(destination) <= self.ESCORT_ARRIVAL_RADIUS:
+                state["arrived"] = True
+                self.say("Конвой прибыл! Контракт можно сдать в порту.", "good")
 
     def renew_contract(self, key):
         """Explicitly start a new job after the previous reward was claimed."""
@@ -898,6 +940,8 @@ class World:
         }
         if key == "scout":
             self.contracts[key]["explored"] = False
+        elif key == "escort":
+            self.contracts[key] = self._new_escort_state(cycle)
         self.say(f"Новый контракт: {self.CONTRACTS[key][0]} (заказ №{cycle + 1})")
         return True
 
@@ -912,6 +956,12 @@ class World:
             progress = min(amount, int(self.captain.cargo.get("salt", 0)))
         elif key == "scout":
             progress = int(state["explored"])
+        elif key == "escort":
+            progress = int(state["arrived"])
+            if not progress:
+                seconds = min(self.ESCORT_REQUIRED_SECONDS, state["close_seconds"])
+                return (f"Контракт: {name} — {seconds:.0f}/{self.ESCORT_REQUIRED_SECONDS:.0f} с "
+                        f"рядом с конвоем №{state['convoy'] + 1}")
         else:
             progress = min(amount, max(0, self.captain.kills - state["start_kills"]))
         return f"Контракт: {name} {progress}/{amount} — сдать в порту"
@@ -925,6 +975,8 @@ class World:
             self.contracts[key] = {"status": "active", "start_kills": self.captain.kills}
             if key == "scout":
                 self.contracts[key]["explored"] = False
+            elif key == "escort":
+                self.contracts[key] = self._new_escort_state(0)
             self.say(f"Принят контракт: {self.CONTRACTS[key][0]}")
             return True
         if state["status"] != "active":
@@ -938,6 +990,9 @@ class World:
                 del self.captain.cargo["salt"]
         elif key == "scout":
             if not state["explored"]:
+                return False
+        elif key == "escort":
+            if not state["arrived"]:
                 return False
         elif self.captain.kills - state["start_kills"] < amount:
             return False

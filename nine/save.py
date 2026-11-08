@@ -159,6 +159,16 @@ def from_dict(d):
                     and 0 <= entry["start_kills"] <= cap.kills):
                 if key == "scout" and type(entry.get("explored")) is not bool:
                     continue
+                if key == "escort":
+                    if (entry.get("origin") not in ("port", "platform")
+                            or type(entry.get("convoy")) is not int
+                            or entry["convoy"] not in (0, 1)
+                            or type(entry.get("leg")) is not int
+                            or entry["leg"] < -1
+                            or type(entry.get("close_seconds")) not in (int, float)
+                            or not 0 <= entry["close_seconds"] <= 100000
+                            or type(entry.get("arrived")) is not bool):
+                        continue
                 cycle = entry.get("cycle", 0)
                 if type(cycle) is not int or not 0 <= cycle <= 9999:
                     continue
@@ -169,6 +179,12 @@ def from_dict(d):
                     world.contracts[key]["cycle"] = cycle
                 if key == "scout":
                     world.contracts[key]["explored"] = entry["explored"]
+                elif key == "escort":
+                    world.contracts[key].update({
+                        "origin": entry["origin"], "convoy": entry["convoy"],
+                        "leg": entry["leg"], "close_seconds": entry["close_seconds"],
+                        "arrived": entry["arrived"],
+                    })
     # враги и события не сохраняются — после загрузки море спокойное
     world.events.next_spawn = world.t + 45.0
     return world
