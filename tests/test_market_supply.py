@@ -20,7 +20,8 @@ def test_convoy_arrival_replenishes_destination_once():
     world.t = arrival + 0.2
     world.update_market()
     assert world.market_available("salt", "platform") == platform_before + 20
-    assert world.market_available("filament", "port") == port_before
+    # Trader 1 arrives at the refuge at the same timestamp.
+    assert world.market_available("filament", "port") == port_before + 12
     once = copy.deepcopy(world.market_stock)
     world.update_market()
     assert world.market_stock == once
