@@ -7,6 +7,7 @@
 
 import math
 import random
+from collections import OrderedDict
 
 import numpy as np
 import pygame
@@ -56,7 +57,7 @@ class Ocean:
         def ripple(u, v):
             k = _fbm((r1, r2), u, v)
             ridge = max(0.0, 1.0 - abs(k - 0.5) * 18)          # тонкие гребни
-            return (*P.GLINT, int(26 * ridge))
+            return (*P.GLINT, int(19 * ridge))
 
         s1, s2 = ValueNoise(seed + 13, 4), ValueNoise(seed + 14, 8)
 
@@ -67,20 +68,20 @@ class Ocean:
             crest = max(0.0, math.sin(2 * math.pi * phase)) ** 6
             trough = max(0.0, -math.sin(2 * math.pi * phase)) ** 2
             if crest > trough:
-                return (*P.GLINT, int(44 * crest))
-            return (2, 6, 12, int(40 * trough))
+                return (*P.GLINT, int(34 * crest))
+            return (*P.OCEAN_DEEP, int(28 * trough))
 
         w1, w2, w3 = ValueNoise(seed + 9, 4), ValueNoise(seed + 10, 8), ValueNoise(seed + 11, 16)
 
         def wisp(u, v):
             k = _fbm((w1, w2, w3), u, v)
             a = max(0.0, min(1.0, (k - 0.38) * 2.6))
-            return (*P.VEIL_WISP, int(170 * a ** 1.3))
+            return (*P.VEIL_WISP, int(110 * a ** 1.3))
 
         if seed not in _TILES:
             _TILES[seed] = (_tile(water), _tile(ripple, 192), _tile(wisp), _tile(swell, 160))
         self.water_tile, self.ripple_tile, self.wisp_tile, self.swell_tile = _TILES[seed]
-        self._scaled = {}
+        self._scaled = OrderedDict()  # bounded scaled textures across camera zooms
         self.rng = random.Random(seed)
         self.mask_small = None
         self._mask_zoom = None
@@ -89,6 +90,17 @@ class Ocean:
         self.frame = 0
         self._screen_layer = None
         self.wisps_enabled = True
+        self.high_quality = True
+        self.mask_cell_px = MASK_CELL_PX
+
+    def set_quality(self, high):
+        """Switch visual budgets without changing the simulation or veil field."""
+        self.high_quality = bool(high)
+        self.wisps_enabled = bool(high)
+        self.mask_cell_px = MASK_CELL_PX if high else 44
+        self.mask_small = None
+        self._mask_zoom = None
+        self._wisp_zoom = None
 
     def _layer(self, cam):
         """Переиспользуемый полноэкранный прозрачный слой."""
@@ -104,8 +116,10 @@ class Ocean:
         key = (name, size)
         img = self._scaled.get(key)
         if img is None:
-            if len(self._scaled) > 60:
-                self._scaled.clear()
+            # Keep no more than 16 sizable cached textures (not a growing
+            # collection of high-resolution 3x3 surfaces during zoom).
+            if len(self._scaled) >= 16:
+                self._scaled.popitem(last=False)
             # масштабируем мозаику 3×3 и берём центр — без швов на краях плитки
             n = tile.get_width()
             mosaic = pygame.Surface((n * 3, n * 3), pygame.SRCALPHA)
@@ -114,6 +128,8 @@ class Ocean:
                     mosaic.blit(tile, (i * n, j * n))
             big = pygame.transform.smoothscale(mosaic, (size * 3, size * 3))
             img = self._scaled[key] = big.subsurface((size, size, size, size)).copy()
+        else:
+            self._scaled.move_to_end(key)
         return img
 
     def _tiled(self, screen, img, world_w, cam, offset=Vector2()):
@@ -140,6 +156,8 @@ class Ocean:
         self._tiled(screen, sw, SWELL_TILE_W, cam, Vector2(-t * 16, -t * 6))       # зыбь бежит по ветру
         rip = self._scaled_tile("ripple", self.ripple_tile, OCEAN_TILE_W * 0.7, cam.zoom)
         self._tiled(screen, rip, OCEAN_TILE_W * 0.7, cam, Vector2(t * 9, t * 4))
+        if not self.high_quality:
+            return
         self._tiled(screen, rip, OCEAN_TILE_W * 0.7, cam, Vector2(-t * 6 + 211, t * 7 + 97))
         # блики: детерминированные точки мира, мерцают
         x0, y0, x1, y1 = cam.world_rect()
@@ -176,8 +194,9 @@ class Ocean:
             screen.blit(self.wisps, cam.w2s(self._wisp_origin))
 
     def _rebuild_tint(self, cam, world, clear_points=()):
-        cw, ch = cam.w // MASK_CELL_PX + 3, cam.h // MASK_CELL_PX + 3
-        step = MASK_CELL_PX / cam.zoom
+        cell = self.mask_cell_px
+        cw, ch = cam.w // cell + 3, cam.h // cell + 3
+        step = cell / cam.zoom
         x0, y0, _, _ = cam.world_rect()
         x0 -= x0 % step + step
         y0 -= y0 % step + step
@@ -194,27 +213,31 @@ class Ocean:
                 clear += k * np.exp(-((X - px) ** 2 + (Y - py) ** 2) / (60.0 ** 2))
             d = d * (1 - np.clip(clear, 0, 0.85))
         self.density_view = d
-        hot = np.clip(d - 0.75, 0, 1)[..., None] * 2
-        base, surge = np.array(P.VEIL_TINT, float), np.array(P.SURGE, float)
-        rgb = base + (surge - base) * hot
-        # светящиеся границы зон: Чистый слой | Мгла | Плотная Пелена
-        pulse = 0.75 + 0.25 * math.sin(world.t * 2.2)
-        band = (np.exp(-((d - 0.30) / 0.018) ** 2) + np.exp(-((d - 0.60) / 0.018) ** 2)) * pulse
-        rgb = rgb + (np.array((210, 180, 255), float) - rgb) * np.clip(band, 0, 1)[..., None] * 0.7
+        # Main palette: ocean steel -> veil depth -> luminous cyan with
+        # a very small fringe only on exceptional density boundaries.
+        base = np.array(P.VEIL_TINT, float)
+        glow = np.array(P.VEIL_GLOW, float)
+        rgb = base + (glow - base) * np.clip((d - 0.48) * 0.72, 0, 0.45)[..., None]
+        # Soft transitions avoid hard neon contour lines across ship silhouettes.
+        band = np.exp(-((d - 0.30) / 0.038) ** 2) + np.exp(-((d - 0.60) / 0.038) ** 2)
+        pulse = 0.92 + 0.08 * math.sin(world.t * 0.9)
+        fringe = np.array(P.VEIL_FRINGE, float)
+        rgb += (fringe - rgb) * np.clip(band * pulse * 0.14, 0, 0.17)[..., None]
         tint = pygame.Surface((cw, ch), pygame.SRCALPHA)
         pygame.surfarray.pixels3d(tint)[:] = np.clip(rgb, 0, 255).astype(np.uint8)
-        alpha = np.minimum(92, 4 + 90 * d ** 1.5) + 70 * np.clip(band, 0, 1)
-        pygame.surfarray.pixels_alpha(tint)[:] = np.clip(alpha, 0, 255).astype(np.uint8)
+        # Capped translucency keeps outlines and UI-relevant threats legible.
+        alpha = 5 + 64 * np.clip(d, 0, 1) ** 1.45 + 15 * np.clip(band, 0, 1)
+        pygame.surfarray.pixels_alpha(tint)[:] = np.clip(alpha, 0, 86).astype(np.uint8)
         mask = pygame.Surface((cw, ch), pygame.SRCALPHA)
         mask.fill((255, 255, 255, 0))
-        pygame.surfarray.pixels_alpha(mask)[:] = (200 * np.clip((d - 0.25) * 1.6, 0, 1)).astype(np.uint8)
-        self.tint_big = pygame.transform.smoothscale(tint, (cw * MASK_CELL_PX, ch * MASK_CELL_PX))
+        pygame.surfarray.pixels_alpha(mask)[:] = (155 * np.clip((d - 0.29) * 1.3, 0, 1)).astype(np.uint8)
+        self.tint_big = pygame.transform.smoothscale(tint, (cw * cell, ch * cell))
         self.mask_small = mask
 
     def _rebuild_wisps(self, cam, world):
         """Космы: две текстуры, плывущие в разные стороны, под маской плотности."""
         cw, ch = self.mask_small.get_size()
-        size = (cw * MASK_CELL_PX, ch * MASK_CELL_PX)
+        size = (cw * self.mask_cell_px, ch * self.mask_cell_px)
         self._wisp_origin = Vector2(self._mask_origin)
         self._wisp_zoom = cam.zoom
         t = world.t
@@ -273,8 +296,8 @@ class Ocean:
                 a = math.radians(base + k * 13 + 6 * math.sin(t + arm))      # закрученная спираль
                 pts.append((s.x + math.cos(a) * cam.px(rr), s.y + math.sin(a) * cam.px(rr)))
             width = max(2, int(cam.px(14)))
-            pygame.draw.lines(layer, (170, 120, 230, 60), False, pts, width)
-            pygame.draw.lines(layer, (210, 180, 255, 90), False, pts, max(1, width // 5))
+            pygame.draw.lines(layer, (*P.VEIL_WISP, 56), False, pts, width)
+            pygame.draw.lines(layer, (*P.VEIL_GLOW, 78), False, pts, max(1, width // 5))
         screen.blit(layer, (0, 0))
 
     # --- погода ---------------------------------------------------------------
@@ -293,7 +316,8 @@ class Ocean:
             for _ in range(n):
                 x = rng.uniform(0, cam.w)
                 y = rng.uniform(0, cam.h)
-                pygame.draw.line(screen, (150, 150, 185), (x, y), (x + vec.x, y + vec.y), 1)
+                pygame.draw.line(screen, P.mix(P.OCEAN_LIGHT, P.FOAM, 0.25),
+                                 (x, y), (x + vec.x, y + vec.y), 1)
         # Всплеск: пульсирующее свечение и разряды
         for ev in world.events.active:
             if ev.phase(t) != "active" or not ev.data.telegraphed_by_rays:
@@ -315,7 +339,7 @@ class Ocean:
                     for _ in range(6):
                         d = d.rotate(rng.uniform(-50, 50))
                         pts.append(pts[-1] + d * cam.px(rng.uniform(8, 20)))
-                    pygame.draw.lines(screen, (220, 180, 255), False, pts, 1)
+                    pygame.draw.lines(screen, P.VEIL_FRINGE, False, pts, 1)
         if fx.flash > 0:
             v = int(90 * fx.flash)
             screen.fill((v, v, int(v * 1.2)), special_flags=pygame.BLEND_ADD)

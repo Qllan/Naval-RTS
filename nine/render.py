@@ -59,7 +59,8 @@ class Renderer:
         self.lighting.set_scale(2 if self.high_quality else 4)
         self.lighting.cache.clear()
         self.fx.max_particles = 2200 if self.high_quality else 700
-        self.ocean.wisps_enabled = self.high_quality
+        self.ocean.set_quality(self.high_quality)
+        self.wakes.high_quality = self.high_quality
         self.halos = self.high_quality
         self.motes.max_count = 160 if self.high_quality else 60
         self.haze_enabled = self.high_quality

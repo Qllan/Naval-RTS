@@ -52,14 +52,14 @@ class VeilMotes:
         for pos, _, length, ang, _, phase, local in self.motes:
             tw = 0.5 + 0.5 * math.sin(t * 3.1 + phase)
             k = (0.35 + 0.65 * tw) * min(1.0, local * 1.4)
-            col = P.mix((70, 50, 110), (230, 210, 255), k * (0.55 + 0.45 * night))
+            col = P.mix(P.VEIL_WISP, P.VEIL_GLOW, k * (0.55 + 0.45 * night))
             s = cam.w2s(pos)
             d = Vector2(1, 0).rotate(ang) * cam.px(length) * 0.5
             pygame.draw.line(screen, col, s - d, s + d, 1)
             if tw > 0.7:
-                pygame.draw.circle(screen, P.mix(col, (255, 255, 255), 0.4), s, 1)      # кристаллическая искра
+                pygame.draw.circle(screen, P.mix(col, P.FOAM, 0.24), s, 1)      # кристаллическая искра
             if tw > 0.85 and night > 0.3:
-                img = fx.glow(P.shade((170, 130, 255), 0.5 * night * k), cam.px(4))
+                img = fx.glow(P.shade(P.VEIL_GLOW, 0.35 * night * k), cam.px(4))
                 screen.blit(img, img.get_rect(center=s), special_flags=pygame.BLEND_ADD)
 
 
@@ -73,7 +73,7 @@ class Haze:
     def draw(self, screen, cam, density, t):
         if density < 0.2:
             return
-        alpha = int(min(1.0, (density - 0.2) / 0.6) * 95)
+        alpha = int(min(1.0, (density - 0.2) / 0.6) * 56)
         size = int(360 * cam.zoom) // 8 * 8 or 8
         key = (size, alpha // 8)
         img = self.cache.get(key)
@@ -107,14 +107,14 @@ def draw_surge_telegraphs(screen, cam, world, fx):
         pulse = 0.5 + 0.5 * math.sin(t * (3 + 6 * k))
         c = cam.w2s(ev.pos)
         r = cam.px(ev.data.radius * (0.25 + 0.55 * k))
-        img = fx.glow(P.shade((150, 70, 220), 0.25 + 0.35 * k * pulse), r)
+        img = fx.glow(P.shade(P.VEIL_GLOW, 0.23 + 0.27 * k * pulse), r)
         screen.blit(img, img.get_rect(center=c), special_flags=pygame.BLEND_ADD)
         # расходящиеся кольца из глубины
         for i in range(3):
             ph = (t * 0.6 + i / 3) % 1
             rr = int(cam.px(ev.data.radius * 0.8 * ph))
             if rr > 2:
-                pygame.draw.circle(screen, P.mix(P.OCEAN_MID, (170, 110, 240), (1 - ph) * k), c, rr, 1)
+                pygame.draw.circle(screen, P.mix(P.OCEAN_MID, P.VEIL_FRINGE, (1 - ph) * k * 0.55), c, rr, 1)
 
 
 class SkyGlimpse:
@@ -179,8 +179,8 @@ def distort(screen, density, t, strength=1.0):
     if k <= 0.02:
         return
     ghost = screen.copy()
-    ghost.fill((255, 110, 255), special_flags=pygame.BLEND_MULT)
-    ghost.set_alpha(int(60 * k))
+    ghost.fill(P.mix((255, 255, 255), P.VEIL_GLOW, 0.4), special_flags=pygame.BLEND_MULT)
+    ghost.set_alpha(int(36 * k))
     off = int(2 + 4 * k * (0.6 + 0.4 * math.sin(t * 7)))
     screen.blit(ghost, (off, 0))
     if int(t * 5) % 7 == 0:
@@ -198,7 +198,7 @@ def draw_cocoon(screen, cam, ship, t):
     pts = outline(ship.hull.key)
     rng = random.Random(hash(ship.hull.key) & 0xffff)
     n = int(6 + 34 * f)
-    col = P.mix((90, 60, 130), (220, 200, 255), 0.4 + 0.3 * math.sin(t * 2))
+    col = P.mix(P.VEIL_WISP, P.VEIL_GLOW, 0.3 + 0.2 * math.sin(t * 1.2))
     for i in range(n):
         a = pts[rng.randrange(len(pts))]
         b = pts[rng.randrange(len(pts))]
@@ -209,5 +209,5 @@ def draw_cocoon(screen, cam, ship, t):
     if f > 0.3:
         for i in range(int(10 * f)):
             q = Vector2(pts[rng.randrange(len(pts))]) * rng.uniform(0.95, 1.12)
-            pygame.draw.circle(screen, (235, 220, 255), cam.w2s(ship.pos + q.rotate(ship.angle)),
+            pygame.draw.circle(screen, P.VEIL_GLOW, cam.w2s(ship.pos + q.rotate(ship.angle)),
                                max(1, int(cam.px(0.5))))

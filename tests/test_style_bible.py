@@ -59,10 +59,14 @@ def test_documented_palette_matches_code_exactly():
     assert "Slot.diagram_pos" in doc and "Slot.pos" in doc
 
 
-def test_style_tokens_do_not_mutate_live_game_palette():
-    from nine.gfx import palette as old
+def test_r13_ocean_and_veil_use_approved_style_palette():
+    from nine.gfx import palette as live
 
-    assert old.OCEAN_DEEP == (8, 18, 30)
-    assert old.VEIL_TINT == (84, 44, 128)
-    # The new target is intentionally distinct until R1.3.
-    assert rgb("water_deep") != old.OCEAN_DEEP
+    assert live.OCEAN_DEEP == rgb("water_deep")
+    assert live.OCEAN_MID == rgb("water_mid")
+    assert live.OCEAN_LIGHT == rgb("water_ridge")
+    assert live.FOAM == rgb("water_foam")
+    assert live.VEIL_TINT == rgb("veil_depth")
+    assert live.VEIL_WISP == rgb("veil_mist")
+    assert live.VEIL_GLOW == rgb("veil_glow")
+    assert live.VEIL_FRINGE == rgb("veil_fringe")
