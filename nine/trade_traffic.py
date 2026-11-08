@@ -18,6 +18,7 @@ CELL = 160
 CLEARANCE = 90
 CRUISE_SPEED = 62.0
 PORT_DWELL = 24.0
+ESCORT_LAG_SECONDS = 9.0
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,16 @@ class Trader:
     angle: float
     underway: bool
     name: str
+
+
+@dataclass(frozen=True)
+class Escort:
+    """Visible convoy guard, following the same water-safe route."""
+    pos: Vector2
+    angle: float
+    underway: bool
+    name: str
+    convoy: int
 
 
 def _cell(pos):
@@ -134,3 +145,19 @@ class TradeTraffic:
                 moving = True
             result.append(Trader(pos, angle, moving, f"Торговец {index + 1}"))
         return tuple(result)
+
+
+    def escort_snapshot(self, time):
+        """Each guard trails its trader on the exact same island-safe route.
+
+        When the trader is docked, its guard also holds station at the
+        route endpoint. No collision, combat AI, or persistent RNG state.
+        """
+        traders = self.snapshot(time)
+        trailing = self.snapshot(time - ESCORT_LAG_SECONDS)
+        escorts = []
+        for index, (leader, previous) in enumerate(zip(traders, trailing)):
+            escort = previous if leader.underway else leader
+            escorts.append(Escort(Vector2(escort.pos), escort.angle,
+                                  leader.underway, f"Патруль {index + 1}", index))
+        return tuple(escorts)
