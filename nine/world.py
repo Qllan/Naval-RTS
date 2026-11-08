@@ -19,6 +19,7 @@ from .modules import AMMO, AMMO_ORDER, MODULES
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship, fit_problems
 from .spatial import ShipCollisionGrid, ship_overlaps
 from .veil import Veil
+from .trade_traffic import TradeTraffic
 
 MODULE_RESALE = 0.5
 HULL_RESALE = 0.5
@@ -107,6 +108,7 @@ class World:
              if not island_at(self.islands, pos, C.PORT_RADIUS + 100)),
             Vector2(C.PLATFORM_CANDIDATES[0]))
         self.active_port = "port"
+        self.trade_traffic = TradeTraffic(self.port, self.platform, self.islands)
         self._aground_cd = 0.0
         for _ in range(280):
             self._spawn_node()
