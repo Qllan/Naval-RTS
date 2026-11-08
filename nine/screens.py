@@ -586,6 +586,9 @@ class MapScreen(Screen):
             for trader in world.trade_traffic.snapshot(world.t):
                 if world.perceives(trader.pos) or world.on_radar(trader.pos):
                     pygame.draw.circle(s, (95, 212, 190), self.w2m(trader.pos), 3)
+            for escort in world.trade_traffic.escort_snapshot(world.t):
+                if world.perceives(escort.pos) or world.on_radar(escort.pos):
+                    pygame.draw.circle(s, (145, 180, 255), self.w2m(escort.pos), 3, 1)
             for pi in world.pirates:
                 if world.on_radar(pi.ship.pos) or world.perceives(pi.ship.pos):
                     pygame.draw.circle(s, ui.BAD, self.w2m(pi.ship.pos), 3)
