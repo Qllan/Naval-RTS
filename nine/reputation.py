@@ -3,9 +3,10 @@
 MAX_REPUTATION = 100
 PARTNER_AT = 20
 TRUSTED_AT = 50
+MASTER_AT = 75
 REPUTATION_GAIN = {
     "salt": 5, "pirates": 5, "scout": 5,
-    "escort": 8, "urgent": 8, "guild": 10,
+    "escort": 8, "urgent": 8, "guild": 10, "master": 12,
 }
 
 
@@ -20,6 +21,8 @@ def valid_reputation(data):
 
 
 def rank(points):
+    if points >= MASTER_AT:
+        return "Мастер гильдии"
     if points >= TRUSTED_AT:
         return "Доверенный партнёр"
     if points >= PARTNER_AT:
@@ -28,7 +31,9 @@ def rank(points):
 
 
 def discount(points):
-    """Tiered service discount, with a 10% maximum."""
+    """Tiered service discount, capped at 15% for masters."""
+    if points >= MASTER_AT:
+        return 0.15
     if points >= TRUSTED_AT:
         return 0.10
     if points >= PARTNER_AT:
@@ -43,3 +48,13 @@ def add_reputation(reputation, port, contract):
     old = reputation[port]
     reputation[port] = min(MAX_REPUTATION, old + points)
     return reputation[port] - old
+
+def next_rank(points):
+    """Progress target and label for the next guild milestone."""
+    if points < PARTNER_AT:
+        return PARTNER_AT, "Партнёр"
+    if points < TRUSTED_AT:
+        return TRUSTED_AT, "Доверенный"
+    if points < MASTER_AT:
+        return MASTER_AT, "Мастер"
+    return MAX_REPUTATION, "Максимальный ранг"
