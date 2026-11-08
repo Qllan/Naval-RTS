@@ -82,3 +82,47 @@ def test_r14_real_four_screen_preview_created(tmp_path):
     img = pygame.image.load(str(path))
     assert img.get_size() == (2616, 1538)
     pygame.quit()
+
+
+
+def test_shipyard_description_never_overprints_price_or_stats():
+    """Long hull descriptions must push the price below their final line."""
+    import pygame
+    from nine.hulls import PLAYER_HULLS
+
+    pygame.font.init()
+    ui.Fonts.reset()
+    surface = pygame.Surface((1280, 720))
+    world = World(seed=5, first_event=1e9)
+    world.captain.credits = 12000
+    port = PortUI(surface)
+    port.tab = 1
+    for index, hull in enumerate(PLAYER_HULLS):
+        port.sel = index
+        recorded = []
+        wrapped_end = []
+        original_text, original_wrapped = port.text, port.wrapped
+
+        def record(text, pos, *args, **kwargs):
+            recorded.append((str(text), pos))
+            return original_text(text, pos, *args, **kwargs)
+
+        def wrap(text, pos, width, *args, **kwargs):
+            bottom = original_wrapped(text, pos, width, *args, **kwargs)
+            if text == hull.desc:
+                wrapped_end.append(bottom)
+            return bottom
+
+        port.text = record
+        port.wrapped = wrap
+        port.draw(world, 0.4)
+        assert wrapped_end, hull.key
+        price = next(pos[1] for text, pos in recorded
+                     if text.startswith("Цена с базовым оснащением"))
+        slot = next(pos[1] for text, pos in recorded if text.startswith("Слоты:"))
+        assert price >= wrapped_end[-1] + 5, hull.key
+        assert slot >= price + 22, hull.key
+        assert any(hull.name in text for text, _ in recorded)
+        # Remove instrumentation before the next hull's draw.
+        port.text, port.wrapped = original_text, original_wrapped
+    ui.Fonts.reset()

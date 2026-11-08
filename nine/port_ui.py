@@ -697,8 +697,11 @@ class PortUI:
         metric("Поворот", "turn", y + 399)
         metric("Компоновка %", "layout_turn_pct", y + 420, decimals=1)
 
-    def _stats(self, world, x, y, preview=None):
-        """Сводка корабля; с `preview` — сравнение «было > станет»."""
+    def _stats(self, world, x, y, preview=None, *, columns=1):
+        """Ship comparison; optional 2-column density for the wide shipyard.
+
+        Other uses (narrow service pane) retain their old layout.
+        """
         cargo = world.cargo_used
         cur = ship_summary(world.player, cargo)
         new = ship_summary(preview, cargo) if preview else None
@@ -707,15 +710,23 @@ class PortUI:
             title += f"  >  {preview.hull.name}"
         self.text(title, (x, y), ACCENT)
         y += 26
+        columns = 2 if columns == 2 else 1
+        rows = (len(cur) + columns - 1) // columns
+        step = 23 if columns == 2 else 21
+        column_width = 305
         for i, (label, val, higher) in enumerate(cur):
-            self.text(label, (x, y + i * 21), DIM, self.small)
-            self.text(f"{val:.0f}", (x + 200, y + i * 21), UI, self.small, right=True)
+            col_index = i // rows
+            row_index = i % rows
+            xx, yy = x + col_index * column_width, y + row_index * step
+            self.text(label, (xx, yy), DIM, self.small)
+            self.text(f"{val:.0f}", (xx + 200, yy), UI, self.small, right=True)
             if new:
                 nv = new[i][1]
                 if abs(nv - val) > 0.5:
                     better = (nv > val) == higher
-                    self.text(f"> {nv:.0f}", (x + 212, y + i * 21), ui.GOOD if better else ui.BAD, self.small)
-        y += len(cur) * 21 + 10
+                    self.text(f"> {nv:.0f}", (xx + 212, yy),
+                              ui.GOOD if better else ui.BAD, self.small)
+        y += rows * step + 12
         p = world.player
         col = WARN if min(p.subsystems.values()) < 1 else DIM
         for i in range(0, len(SUBSYSTEMS), 2):
@@ -761,16 +772,20 @@ class PortUI:
         x, y = body.x + 390, body.y
         self.text(h.name, (x, y), ACCENT, self.big)
         self.text(h.series or h.role, (x, y + 30), DIM)
-        self.wrapped(h.desc, (x, y + 52), 600)
+        desc_bottom = self.wrapped(h.desc, (x, y + 52), 600)
+        price_y = desc_bottom + 7
         self.text(f"Цена с базовым оснащением {full} КК, со сдачей текущего корпуса {cost} КК",
-                  (x, y + 74), UI, self.small)
+                  (x, price_y), UI, self.small)
         slots = {}
         for s in h.slots:
             slots.setdefault(s.category, []).append(SIZE_NAME[s.size])
         line = ", ".join(f"{CATEGORY_NAME[c]} {'/'.join(v)}" for c, v in slots.items())
-        self.text("Слоты: " + line, (x, y + 96), DIM, self.small)
+        slots_y = price_y + 24
+        self.text("Слоты: " + line, (x, slots_y), DIM, self.small)
         preview = Ship(h.key, (0, 0))
-        self._stats(world, x, y + 128, preview)
+        # Flexible description height + 2 columns keep the comparison
+        # inside the viewport even when the hull has a long specification.
+        self._stats(world, x, slots_y + 30, preview, columns=2)
 
     def _showcase(self, ship, rect, t):
         from .gfx.camera import Camera
