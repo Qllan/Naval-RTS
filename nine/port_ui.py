@@ -954,8 +954,8 @@ class PortUI:
         self.text("Примите задание, выполните условия в море и вернитесь в порт.",
                   (body.x, body.y + 44), DIM, self.small)
         for i, (key, label) in enumerate(self.contract_items(world)):
-            y = body.y + 80 + i * 78
-            rect = pygame.Rect(body.x, y, min(760, body.w), 66)
+            y = body.y + 75 + i * 68
+            rect = pygame.Rect(body.x, y, min(760, body.w), 60)
             self.zones.append((rect, "row", i))
             state = world.contracts.get(key)
             status = "ДОСТУПЕН" if state is None else (
@@ -965,7 +965,7 @@ class PortUI:
             elif rect.collidepoint(self.mouse):
                 pygame.draw.rect(self.screen, ui.FAINT, rect, 1)
             self.text(label, (rect.x + 12, rect.y + 8), UI, self.small)
-            self.text(status, (rect.x + 12, rect.y + 36),
+            self.text(status, (rect.x + 12, rect.y + 33),
                       ACCENT if status == "ВЫПОЛНЕН" else DIM, self.small)
         self.text("ЛКМ / ENTER — принять, сдать или обновить контракт",
                   (body.x, body.bottom - 38), DIM, self.small)

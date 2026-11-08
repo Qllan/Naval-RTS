@@ -719,10 +719,16 @@ def journal_entries(world):
             current = int(bool(state.get("arrived")))
             origin = "Порта беженцев" if state["origin"] == "port" else "Платформы"
             objective = f"Сопроводить конвой №{state['convoy'] + 1} от {origin}"
+        elif key == "urgent":
+            current = min(target, int(world.captain.cargo.get(state["kind"], 0)))
+            destination = "Порт беженцев" if state["destination"] == "port" else "Торговая платформа"
+            objective = f"Доставить {state['kind']} в {destination}"
         else:
             continue
         status = "ЗАВЕРШЁН" if done else (
-            "МОЖНО СДАТЬ В ПОРТ" if current >= target else "В РАБОТЕ"
+            "МОЖНО СДАТЬ В ПОРТ" if current >= target
+            and (key != "urgent" or world.active_port == state["destination"])
+            else "В РАБОТЕ"
         )
         entries.append((key, name, objective, current, target, reward, status))
     return entries
@@ -751,19 +757,20 @@ class CaptainsJournal(Screen):
             ui.text(s, "Контрактов пока нет. Возьмите задание в порту.",
                     r.center, ui.DIM, 20, anchor="center")
         for i, (_, name, objective, current, target, reward, status) in enumerate(entries):
-            y = r.y + 90 + i * 90
-            if y + 82 > r.bottom - 35:
+            row_gap = min(90, max(68, (r.h - 150) // max(1, len(entries))))
+            y = r.y + 85 + i * row_gap
+            if y + row_gap - 4 > r.bottom - 35:
                 break
-            row = pygame.Rect(r.x + 18, y, r.w - 36, 82)
+            row = pygame.Rect(r.x + 18, y, r.w - 36, row_gap - 4)
             pygame.draw.rect(s, ui.FAINT, row, 1)
-            ui.text(s, name, (row.x + 14, row.y + 7), ui.TEXT, 20, True)
+            ui.text(s, name, (row.x + 14, row.y + 5), ui.TEXT, 19, True)
             ui.text(s, status, (row.right - 12, row.y + 12),
                     ui.ACCENT if status != "В РАБОТЕ" else ui.DIM,
                     16, anchor="topright")
-            ui.text(s, objective, (row.x + 14, row.y + 34), ui.DIM, 17)
+            ui.text(s, objective, (row.x + 14, row.y + 28), ui.DIM, 16)
             progress = "Выполнено" if status == "ЗАВЕРШЁН" else f"{current}/{target}"
             ui.text(s, f"Прогресс: {progress}    Награда: {reward} КК",
-                    (row.x + 14, row.y + 56), ui.TEXT, 16)
+                    (row.x + 14, row.y + 48), ui.TEXT, 15)
         ui.text(s, "J / Esc — закрыть. Награду можно получить в порту.",
                 (r.centerx, r.bottom - 23), ui.DIM, 16, anchor="midtop")
 
