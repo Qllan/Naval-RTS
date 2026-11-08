@@ -116,7 +116,7 @@ def test_large_font_changes_port_native_fonts_without_changing_hit_geometry():
         after = [(r.x, r.y, r.w, r.h, typ, str(idx))
                  for r, typ, idx in port.zones if typ == "tab"]
         # Tab widths grow with text; their physical hitboxes still match.
-        assert len(after) == len(baseline) == 4
+        assert len(after) == len(baseline) == 5
         for rect, kind, idx in port.zones:
             loc = port.to_display(rect.center)
             assert rect.collidepoint(port.to_logical(loc))
