@@ -48,6 +48,16 @@ jobs:
         with:
           name: naval-rts-bastion-before-after
           path: bastion-before-after.png
+      - name: Render real R1.2 module fitting variants
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_module_fit.py --output module-fit-r12.png
+      - name: Upload R1.2 fitting variants
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-module-fit-r12
+          path: module-fit-r12.png
       - name: Render fitting UI screenshots
         env:
           SDL_VIDEODRIVER: dummy

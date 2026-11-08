@@ -250,9 +250,155 @@ def _blocked(hull_key, x, y, pad=3.5):
     return False
 
 
+def _indexed_modules(hull_key, static_modules):
+    """Normalize old (key, module) and new (slot_index, module) callers.
+
+    The slot index is part of the sprite identity, so a module moved to
+    another fitting slot cannot reuse an incorrect cached hull image.
+    """
+    occupied = set()
+    result = []
+    slots = HULLS[hull_key].slots
+    for locator, module in static_modules:
+        if type(locator) is int:
+            index = locator
+        else:
+            index = next((i for i, slot in enumerate(slots)
+                          if i not in occupied and slot.category == module.category
+                          and module.size <= slot.size), None)
+        if index is None or not 0 <= index < len(slots) or index in occupied:
+            raise ValueError("Invalid duplicate/unknown installation slot")
+        slot = slots[index]
+        if slot.category != module.category or module.size > slot.size:
+            raise ValueError("Module incompatible with visual slot")
+        occupied.add(index)
+        result.append((index, module))
+    return tuple(result)
+
+
+def _industrial_fit_modules(cv, hull_key, pal, installations):
+    """R1.2: actual fitted components on their own schematic deck positions.
+
+    The position is taken only from the hull's non-weapon Slot.diagram_pos.
+    All pictograms are low-cost deterministic vector geometry and are drawn
+    atop the superstructure, so their functional identity survives a refit.
+    """
+    accent = rgb("signal_cyan")
+    low = rgb("signal_cyan_low")
+    amber = rgb("signal_amber")
+    for index, mod in installations:
+        slot = HULLS[hull_key].slots[index]
+        if slot.diagram_pos is None:
+            continue
+        x, y = slot.diagram_pos
+        category = slot.category
+        # Short sides of narrow hulls use thinner housings. Panels remain
+        # local to the actual illustrated outline, including B-31's keel.
+        max_width = max(1.4, 2 * (half_width(hull_key, x) - abs(y) - 0.35))
+        length = (6.4 if mod.size > 1 else 4.0)
+        width = min((4.6 if mod.size > 1 else 2.8), max_width)
+        small = width < 2.3
+        cv.rect(x + 0.25, y + 0.25, length + 0.45, width + 0.3,
+                (0, 0, 0, 95), radius=0.25)
+        cv.rect(x, y, length, width, shade(pal.trim, 1.35), radius=0.26)
+        cv.rect(x, y, length - 0.5, width - 0.45,
+                shade(pal.deck, 0.73), radius=0.18)
+        cv.line((x - length * 0.36, y - width * 0.35),
+                (x + length * 0.36, y - width * 0.35),
+                shade(pal.roof, 1.15), 0.16)
+        if category == "engine":
+            # A visible multi-channel turbine or high-output intake.
+            count = 3 if mod.key.endswith("2") else 2
+            for k in range(count):
+                yy = y + (k - (count - 1) / 2) * width * 0.47
+                cv.line((x - length * 0.33, yy), (x + length * 0.25, yy),
+                        shade(pal.trim, 1.65), 0.36)
+                cv.circle(x - length * 0.32, yy, 0.28, amber)
+            cv.rect(x + length * 0.32, y, 0.5, width * 0.6, amber, radius=0.1)
+        elif category == "reactor":
+            # Circular shielded core with output-class-dependent rings.
+            r = min(width * 0.38, 1.65)
+            cv.circle(x, y, r, shade(pal.armor, 0.68))
+            cv.circle(x, y, r * 0.67, accent if mod.key.endswith("2") else low)
+            if mod.key.endswith("2"):
+                cv.circle(x, y, r * 1.17, amber, width=0.15)
+            for side in (-1, 1):
+                cv.rect(x + side * length * 0.35, y, 0.48, width * 0.55,
+                        shade(pal.roof, 0.85), radius=0.1)
+        elif category == "shield":
+            # Regular emitter = twin fins; veil-resistant = cross lattice.
+            for sign in (-1, 1):
+                cv.line((x - length * 0.28, y + sign * width * 0.28),
+                        (x + length * 0.28, y + sign * width * 0.28),
+                        accent if mod.key == "shield_res_m" else low, 0.28)
+            if mod.key == "shield_res_m":
+                cv.line((x - length * 0.2, y - width * 0.25),
+                        (x + length * 0.2, y + width * 0.25),
+                        rgb("veil_fringe"), 0.27)
+                cv.line((x - length * 0.2, y + width * 0.25),
+                        (x + length * 0.2, y - width * 0.25),
+                        rgb("veil_fringe"), 0.27)
+            else:
+                cv.circle(x, y, width * 0.22, accent, width=0.24)
+        elif category == "armor":
+            # Stacked armor blocks vs visibly lighter fiber composite.
+            count = 3 if mod.key == "armor_comp_m" else 2
+            for k in range(count):
+                xx = x + (k - (count - 1) / 2) * length * 0.29
+                cv.rect(xx, y, max(0.6, length * 0.2), width * 0.75,
+                        shade(pal.armor, 1.1), radius=0.12)
+                if mod.key == "armor_comp_m":
+                    cv.line((xx - 0.4, y - width * 0.3),
+                            (xx + 0.4, y + width * 0.3), low, 0.16)
+        elif category == "sensor":
+            if mod.key == "sonar_m":
+                for sign in (-1, 1):
+                    cv.circle(x + sign * length * 0.17, y, width * 0.19, low,
+                              width=0.22)
+                cv.line((x - length * 0.25, y), (x + length * 0.25, y),
+                        shade(pal.roof, 1.2), 0.18)
+            else:
+                span = length * (0.36 if mod.key == "sensor_m" else 0.24)
+                cv.line((x, y - width * 0.38), (x, y + width * 0.38),
+                        shade(pal.roof, 1.3), 0.32)
+                cv.line((x - span, y), (x + span, y), accent, 0.34)
+                for sign in (-1, 1):
+                    cv.circle(x + sign * span, y, 0.3, low)
+        elif category == "utility":
+            effect = mod.effect
+            if effect == "cargo":
+                for sign in (-1, 0, 1):
+                    cv.rect(x + sign * length * 0.25, y, 0.75, width * 0.67,
+                            shade(pal.armor, 1.1), radius=0.08)
+            elif effect in ("repair", "damage_control"):
+                cv.line((x - 1.0, y), (x + 1.0, y), amber, 0.5)
+                cv.line((x, y - width * 0.35), (x, y + width * 0.35), amber, 0.5)
+            elif effect == "smoke":
+                for shift in (-0.85, 0, 0.85):
+                    cv.circle(x + shift, y, 0.38, shade(pal.roof, 0.8))
+            elif effect == "ecm":
+                cv.line((x - 1.2, y - width * 0.22), (x, y + width * 0.25), accent, 0.3)
+                cv.line((x, y + width * 0.25), (x + 1.2, y - width * 0.22), accent, 0.3)
+                cv.circle(x, y, 0.33, accent)
+            elif effect == "bioscreen":
+                cv.circle(x, y, width * 0.29, low, width=0.23)
+                cv.circle(x, y, width * 0.13, rgb("veil_fringe"))
+            elif effect == "drill":
+                cv.poly([(x - 1.3, y - width * 0.27), (x + 1.5, y),
+                         (x - 1.3, y + width * 0.27)], amber)
+            elif effect == "collector":
+                for sign in (-1, 0, 1):
+                    cv.circle(x + sign * 1.0, y, 0.35, low)
+            else:
+                cv.rect(x, y, 1.5, width * 0.5, amber, radius=0.1)
+        if not small:
+            cv.circle(x - length * 0.42, y - width * 0.27, 0.17, amber)
+
+
 def build_hull(hull_key, pal_key, static_modules, damage_level):
     """Мастер-спрайт корпуса со статичными модулями и следами повреждений."""
     industrial = HULLS[hull_key].visual_style == "industrial_sci_fi"
+    installations = _indexed_modules(hull_key, static_modules)
     pal = industrial_palette(pal_key) if industrial else SHIP_PALETTES[pal_key]
     pts = outline(hull_key)
     extent = max(max(abs(x), abs(y)) for x, y in pts) + 10
@@ -408,7 +554,9 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
                 cv.circle(bx, by, 0.3, shade(pal.trim, 1.6))
                 cv.circle(bx + 0.8, by, 0.3, shade(pal.trim, 1.6))
 
-    _static_modules(cv, hull_key, pal, static_modules, bow, stern, half_w)
+    if not industrial:
+        _static_modules(cv, hull_key, pal,
+                        tuple((m.key, m) for _, m in installations), bow, stern, half_w)
 
     # --- надстройки: тень, корпус, крыша с оборудованием, крылья мостика, окна
     for sx, sy, lx, ly, windows in superstructures(hull_key):
@@ -431,6 +579,9 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
                 for k in range(max(1, int(lx / 2.2))):
                     cv.rect(sx - lx / 2 + 1 + k * 2.2, sy + side * (ly / 2 - 0.35), 0.8, 0.35,
                             shade(pal.window, 0.75), radius=0.05)
+    if industrial:
+        _industrial_fit_modules(cv, hull_key, pal, installations)
+
     for fx_, fy_, r in FUNNELS.get(hull_key, []):
         cv.circle(fx_ + 0.5, fy_ + 0.6, r, (0, 0, 0, 80))
         cv.circle(fx_, fy_, r, shade(pal.trim, 0.9))
@@ -666,8 +817,22 @@ def draw_compact_hull(screen, cam, ship, pal_key, tier="tactical"):
     for weapon in ship.weapons:
         pos = cam.w2s(weapon.world_pos(ship))
         radius = 3 if weapon.defn.size > 1 else 2
+        kind = weapon.defn.kind
         pygame.draw.circle(screen, shade(pal.trim, 1.4), pos, radius + 1)
-        pygame.draw.circle(screen, pal.turret, pos, radius)
+        if kind == "missile":
+            pygame.draw.rect(screen, pal.turret,
+                             (round(pos.x - radius), round(pos.y - radius),
+                              radius * 2, radius * 2))
+            pygame.draw.circle(screen, rgb("signal_amber"), pos, 1)
+        elif kind == "torpedo":
+            direction = Vector2(1, 0).rotate(ship.angle + weapon.slot.facing)
+            pygame.draw.line(screen, pal.turret, pos - direction * radius,
+                             pos + direction * (radius + 2), 3)
+        else:
+            pygame.draw.circle(screen, pal.turret, pos, radius)
+            direction = Vector2(1, 0).rotate(ship.angle + weapon.slot.facing)
+            pygame.draw.line(screen, pal.roof, pos,
+                             pos + direction * (radius + 2), 1)
     if ship.hp < ship.hull.hp * 0.35:
         pygame.draw.circle(screen, rgb("signal_amber"), cam.w2s(ship.pos), 2)
 
@@ -694,10 +859,9 @@ class ShipArt:
         return img
 
     def _hull_master(self, ship, pal_key):
-        static = tuple((k, m) for _, _, m in ship.modules() if m.category in ("armor", "engine", "utility")
-                       for k in [m.key])
+        static = tuple((i, m) for i, _, m in ship.modules() if m.category != "weapon")
         dmg = 0 if ship.hp > ship.hull.hp * 0.6 else 1 if ship.hp > ship.hull.hp * 0.3 else 2
-        key = (ship.hull.key, pal_key, tuple(k for k, _ in static), dmg)
+        key = (ship.hull.key, pal_key, tuple((i, m.key) for i, m in static), dmg)
         m = self.masters.get(key)
         if m is None:
             m = self.masters[key] = build_hull(ship.hull.key, pal_key, static, dmg)
@@ -705,7 +869,7 @@ class ShipArt:
 
     def wreck_pieces(self, ship, pal_key):
         """Две половины разбитого корпуса (нос и корма) — мастер-спрайты того же размера."""
-        static = tuple((m.key, m) for _, _, m in ship.modules() if m.category in ("armor", "engine", "utility"))
+        static = tuple((i, m) for i, _, m in ship.modules() if m.category != "weapon")
         hull_img, _ = build_hull(ship.hull.key, pal_key, static, 2)
         w, h = hull_img.get_size()
         cut = w // 2 + int(R * 2)
