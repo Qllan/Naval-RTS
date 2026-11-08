@@ -102,6 +102,11 @@ class World:
         self.pirate_spawn_cd = 10.0
 
         self.islands = generate_islands(random.Random(seed + 77), self.port, self.eye)
+        self.platform = next(
+            (Vector2(pos) for pos in C.PLATFORM_CANDIDATES
+             if not island_at(self.islands, pos, C.PORT_RADIUS + 100)),
+            Vector2(C.PLATFORM_CANDIDATES[0]))
+        self.active_port = "port"
         self._aground_cd = 0.0
         for _ in range(280):
             self._spawn_node()
@@ -112,7 +117,10 @@ class World:
 
         # Навигация и память: разведанная карта, отметки, путевая точка, кодекс
         self.memory = np.zeros((C.WORLD_H // MEMORY_CELL, C.WORLD_W // MEMORY_CELL), np.float32)
-        self.marks = {"port": {"pos": Vector2(self.port), "label": "Порт беженцев", "kind": "port", "clarity": 1.0}}
+        self.marks = {
+            "port": {"pos": Vector2(self.port), "label": "Порт беженцев", "kind": "port", "clarity": 1.0},
+            "platform": {"pos": Vector2(self.platform), "label": "Торговая платформа", "kind": "port", "clarity": 1.0},
+        }
         self.waypoint = None
         self.codex = {}             # ключ записи → прочитана ли
         self.goals_done = set()
@@ -267,8 +275,20 @@ class World:
             sig *= 0.05
         return sig
 
+    def port_position(self, port_key=None):
+        return self.platform if (port_key or self.active_port) == "platform" else self.port
+
+    def dockable_port(self):
+        """Dock only near a hub and below the speed limit."""
+        if self.player.speed >= C.DOCK_MAX_SPEED:
+            return None
+        for key in ("port", "platform"):
+            if self.player.pos.distance_to(self.port_position(key)) < C.PORT_RADIUS:
+                return key
+        return None
+
     def can_dock(self):
-        return self.player.pos.distance_to(self.port) < C.PORT_RADIUS and self.player.speed < C.DOCK_MAX_SPEED
+        return self.dockable_port() is not None
 
     def perceives(self, pos):
         """Игрок видит точку глазами или радаром."""
@@ -927,11 +947,15 @@ class World:
     # --- порт: сервис -----------------------------------------------------
 
     def dock(self):
-        """Вызывается при заходе в порт. Капсула получает новый корабль."""
+        """Enter the nearby hub."""
+        key = self.dockable_port()
+        if key is None:
+            return False
+        self.active_port = key
         cap = self.captain
         if self.in_capsule:
             self.in_capsule = False
-            self.player = Ship("scout", self.port, -90)
+            self.player = Ship("scout", self.port_position(), -90)
             if cap.pending_insurance:
                 cap.credits += cap.pending_insurance
                 self.say(f"Страховка выплачена: {cap.pending_insurance} КК. Выдан Скаут.")
@@ -940,6 +964,7 @@ class World:
                 self.say("Порт выдал вам списанный Скаут.")
         self.player.vel = Vector2()
         self.player.recharge()
+        return True
 
     def undock_problems(self):
         p = self.player
@@ -953,11 +978,32 @@ class World:
         return problems
 
     def undock(self):
-        self.player.pos = self.port + Vector2(0, -C.PORT_RADIUS - 40)
+        self.player.pos = self.port_position() + Vector2(0, -C.PORT_RADIUS - 40)
         self.player.angle = -90
 
+    def market_price(self, kind, buying=False):
+        """Fixed local prices; buying costs more than selling at the same hub."""
+        if kind not in RESOURCES:
+            raise ValueError("Неизвестный ресурс")
+        multiplier = C.MARKET_MULTIPLIERS[self.active_port][kind]
+        sale = max(1, round(RESOURCES[kind].price * multiplier))
+        return max(sale + 1, math.ceil(sale * C.MARKET_BUY_MARKUP)) if buying else sale
+
+    def buy_resource(self, kind, quantity=C.MARKET_PACK_SIZE):
+        """Purchase market cargo without exceeding credit or hold limits."""
+        if kind not in RESOURCES or type(quantity) is not int or quantity <= 0:
+            return False
+        cost = self.market_price(kind, buying=True) * quantity
+        if self.captain.debt or self.captain.credits < cost:
+            return False
+        if self.cargo_used + quantity > self.cargo_capacity:
+            return False
+        self.captain.credits -= cost
+        self.captain.cargo[kind] = self.captain.cargo.get(kind, 0) + quantity
+        return True
+
     def cargo_value(self):
-        return int(sum(RESOURCES[k].price * v for k, v in self.captain.cargo.items()))
+        return int(sum(self.market_price(k) * v for k, v in self.captain.cargo.items()))
 
     def sell_cargo(self):
         value = self.cargo_value()
