@@ -261,7 +261,9 @@ class PortUI:
             price_buy = world.market_price(kind, True) * C.MARKET_PACK_SIZE
             price_sell = world.market_price(kind)
             quantity = min(C.MARKET_PACK_SIZE, world.captain.cargo.get(kind, 0))
-            items.append((f"Купить {C.MARKET_PACK_SIZE} · {resource.name} — {price_buy} КК",
+            available = world.market_available(kind)
+            items.append((f"Купить {C.MARKET_PACK_SIZE} · {resource.name} — {price_buy} КК "
+                          f"(склад: {available})",
                           lambda k=kind: world.buy_resource(k)))
             items.append((f"Продать до {C.MARKET_PACK_SIZE} · {resource.name} "
                           f"({quantity:.1f} на борту) — {price_sell} КК/ед.",
@@ -936,10 +938,14 @@ class PortUI:
             self.text(resource.name, (x, y), DIM, self.small)
             self.text(f"{here} / {there} КК", (x, y + 24),
                       ACCENT if there > here else UI, self.small)
+            local = world.market_available(kind)
+            remote = world.market_available(
+                kind, "port" if world.active_port == "platform" else "platform")
+            self.text(f"Запасы: {local} / {remote}", (x, y + 44), DIM, self.small)
             y += 75
         self.text(f"Трюм: {world.cargo_used:.1f}/{world.cargo_capacity:.0f}",
                   (body.x, body.bottom - 35), DIM, self.small)
-        self.text("Цены: здесь / другой порт", (x, body.bottom - 35),
+        self.text("Цены и запасы: здесь / другой порт", (x, body.bottom - 35),
                   DIM, self.small)
 
     def _contracts(self, world, body):
