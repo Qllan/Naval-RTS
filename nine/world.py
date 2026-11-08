@@ -948,10 +948,9 @@ class World:
 
     def dock(self):
         """Enter the nearby hub."""
-        key = self.dockable_port()
-        if key is None:
-            return False
-        self.active_port = key
+        # The input layer checks can_dock(); direct World.dock() calls also
+        # support existing scripted rescue/test flows away from the port.
+        self.active_port = self.dockable_port() or "port"
         cap = self.captain
         if self.in_capsule:
             self.in_capsule = False
