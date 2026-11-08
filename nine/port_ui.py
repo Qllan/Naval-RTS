@@ -842,7 +842,7 @@ class PortUI:
 
         self.text("КАТАЛОГ КОРПУСОВ", (rail.x + 12, rail.y + 12), UI, self.small)
         self.text("ВЫБЕРИТЕ КОРАБЛЬ", (rail.x + 12, rail.y + 34), DIM, self.small)
-        page_size = max(1, (rail.h - 102) // 40)
+        page_size = max(1, min(8, (rail.h - 102) // 40))
         first, end = shipyard_window(len(PLAYER_HULLS), self.sel, page_size)
         for row_num, i in enumerate(range(first, end)):
             hull = PLAYER_HULLS[i]

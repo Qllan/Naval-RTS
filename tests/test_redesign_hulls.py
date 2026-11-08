@@ -186,6 +186,9 @@ def test_shipyard_display_preserves_global_row_indices(monkeypatch):
         t = 0.0
         cargo_used = 0
         player = Ship("needle", (0, 0))
+        # The UX shipyard now shows transaction eligibility, so this
+        # synthetic world needs the same minimal captain contract.
+        captain = type("CaptainStub", (), {"credits": 10000, "debt": 0})()
 
         def hull_offer(self, key):
             return (1000, 1000)
