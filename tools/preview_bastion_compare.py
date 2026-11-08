@@ -1,11 +1,10 @@
-"""Generate an authentic R1.1 Bastion before/after review with game ship renderer.
+"""Render R1.1.2 -> R1.1.3 Bastion from real in-game hull/turret art.
 
-The 'before' geometry is the last approved R1.1 visual data. The tool
-temporarily substitutes art-only HullVisual and PROFILES during rendering,
-then restores them. No gameplay data, saves, or world simulation change.
+Old ship geometry and modules are temporarily substituted for the
+left panel, and restored before the right panel. Both images use the
+same world-units-to-pixels scale, without changing any saved state.
 
-Usage:
-    python tools/preview_bastion_compare.py --output bastion-before-after.png
+Usage: python tools/preview_bastion_compare.py --output bastion-before-after.png
 """
 
 import argparse
@@ -21,19 +20,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pygame
 
 from nine.gfx.ship_art import PROFILES, R, build_hull, build_turret
-from nine.hulls import DeckDetail, HULLS
+from nine.hulls import DeckDetail, HULLS, Slot
+from nine.modules import M, S
 from nine.ship import Ship
 
-OLD_PROFILE = ((35, 0), (31, 3.7), (26, 8.3), (17, 11.3),
-               (10, 13), (-9, 13.5), (-21, 14),
-               (-28, 11), (-33, 8), (-36, 0))
-OLD_SUPERSTRUCTURES = ((-5, 0, 15, 10, True),
-                       (-17, 0, 6, 7, False),
-                       (7, 0, 8, 7, False))
+# R1.1.2 exact previous geometry and art. Kept here ONLY for before/after.
+OLD_SHAPE = ((35, 0), (27, 8), (13, 13), (-23, 14), (-34, 8), (-36, 0),
+             (-34, -8), (-23, -14), (13, -13), (27, -8))
+OLD_PROFILE = ((35, 0), (31, 2.4), (26, 6.4), (17, 9.95),
+               (10, 11.8), (-9, 12.4), (-21, 12.5),
+               (-28, 9.6), (-33, 5.6), (-36, 0))
+OLD_WEAPON_SLOTS = (
+    Slot("weapon", M, (19, 0), 0, 265),
+    Slot("weapon", M, (-22, 0), 180, 265),
+    Slot("weapon", S, (0, -11), -90, 180),
+    Slot("weapon", S, (0, 11), 90, 180),
+)
+OLD_SUPERSTRUCTURES = ((-5, 0, 16, 8.6, True),
+                       (-17, 0, 7, 6.6, False),
+                       (7, 0, 8, 6.4, False))
 OLD_DETAILS = (
     DeckDetail("spine_channel", (0, 0), (36, 2.8)),
-    DeckDetail("shoulder_guard", (-9, -12), (12, 1.8)),
-    DeckDetail("shoulder_guard", (-9, 12), (12, 1.8)),
+    DeckDetail("shoulder_guard", (-9, -10.65), (14, 1.6)),
+    DeckDetail("shoulder_guard", (-9, 10.65), (14, 1.6)),
     DeckDetail("armor_plate", (10, -8.5), (9, 4)),
     DeckDetail("armor_plate", (10, 8.5), (9, 4)),
     DeckDetail("armor_plate", (-10, -8.5), (9, 4)),
@@ -42,21 +51,17 @@ OLD_DETAILS = (
     DeckDetail("radiator", (-30, 0), (6, 4)),
 )
 
-BG = (9, 24, 33)
-PANEL = (20, 38, 48)
-LINE = (58, 89, 104)
-LIGHT = (220, 232, 230)
-MUTED = (152, 182, 187)
-ACCENT = (125, 218, 213)
+BG, PANEL, LINE = (9, 24, 33), (20, 38, 48), (58, 89, 104)
+LIGHT, MUTED, ACCENT = (220, 232, 230), (152, 182, 187), (125, 218, 213)
 
 
-def assembled_bastion(profile, visual):
-    """Use the real hull and turret builders with selected art-only metadata."""
+def assembled_bastion(hull):
+    """Use real hull builder, exact hull/weapon mount layout and modules."""
     original = HULLS["bastion"]
     original_profile = PROFILES["bastion"]
     try:
-        HULLS["bastion"] = replace(original, visual=visual)
-        PROFILES["bastion"] = list(profile)
+        HULLS["bastion"] = hull
+        PROFILES["bastion"] = list(hull.visual.render_profile)
         ship = Ship("bastion", (0, 0))
         static = tuple((mod.key, mod) for _, _, mod in ship.modules()
                        if mod.category in ("armor", "engine", "utility"))
@@ -68,8 +73,7 @@ def assembled_bastion(profile, visual):
             offset = pygame.Vector2(weapon.slot.pos) * R
             result.blit(turret, turret.get_rect(center=(
                 round(center.x + offset.x), round(center.y + offset.y))))
-        # In-game bow follows +X; the review sheet shows bow up.
-        upright = pygame.transform.rotate(result, 90)
+        upright = pygame.transform.rotate(result, 90)  # +X bow -> upwards
         return upright.subsurface(upright.get_bounding_rect()).copy()
     finally:
         HULLS["bastion"] = original
@@ -79,53 +83,58 @@ def assembled_bastion(profile, visual):
 def render(output):
     pygame.init()
     try:
-        hull = HULLS["bastion"]
-        old_visual = replace(hull.visual, render_profile=OLD_PROFILE,
-                             superstructures=OLD_SUPERSTRUCTURES, details=OLD_DETAILS)
-        versions = (assembled_bastion(OLD_PROFILE, old_visual),
-                    assembled_bastion(hull.visual.render_profile, hull.visual))
+        current = HULLS["bastion"]
+        old_visual = replace(current.visual, render_profile=OLD_PROFILE,
+                             superstructures=OLD_SUPERSTRUCTURES,
+                             mast=(-5, 0),
+                             deck_ribs=(-30, -20, -10, 0, 10, 20, 30),
+                             deck_strips=(0.38, 0.72), details=OLD_DETAILS)
+        previous = replace(current, shape=OLD_SHAPE, radius=30,
+                           hp=280, mass=185, speed_mult=0.82, turn_rate=76,
+                           price=2500,
+                           slots=OLD_WEAPON_SLOTS + current.slots[4:],
+                           visual=old_visual)
+        before, after = assembled_bastion(previous), assembled_bastion(current)
+        images = (before, after)
+
         sheet = pygame.Surface((1180, 840))
         sheet.fill(BG)
-        h1 = pygame.font.Font(None, 48)
-        h2 = pygame.font.Font(None, 31)
-        body = pygame.font.Font(None, 25)
-        sheet.blit(h1.render("B-31 BASTION  /  SILHOUETTE REFINEMENT", True, LIGHT), (48, 32))
-        sheet.blit(body.render("ACTUAL GAME RENDER  /  EQUAL SCALE  /  TOP DOWN", True, MUTED),
-                   (50, 83))
-
-        # Lock a common scale for both images: no independent scaling trick.
-        scale = min(1.75, 510 / max(x.get_height() for x in versions),
-                    385 / max(x.get_width() for x in versions))
-        for i, (img, label, note, beam) in enumerate((
-            (versions[0], "BEFORE  /  R1.1", "Wide central slab + squared stern", 14.0),
-            (versions[1], "AFTER  /  R1.1.2", "Longer bow + tapered armored hull", 12.5),
+        heading = pygame.font.Font(None, 46)
+        sub = pygame.font.Font(None, 29)
+        desc = pygame.font.Font(None, 24)
+        sheet.blit(heading.render("B-31 BASTION  /  CAPITAL HULL REFRAME", True, LIGHT), (43, 32))
+        sheet.blit(desc.render("SAME PIXELS PER GAME UNIT   /   REAL GAME ART", True, MUTED), (47, 84))
+        scale = min(2.3, 490 / max(im.get_height() for im in images),
+                    360 / max(im.get_width() for im in images))
+        for index, (image, title, note, dimensions, stats) in enumerate((
+            (before, "BEFORE  R1.1.2", "Short and wide", "71 x 25", "280 HP  /  185 MASS"),
+            (after, "AFTER  R1.1.3", "Long and narrow capital ship", "114 x 24", "340 HP  /  230 MASS"),
         )):
-            x = 35 + 565 * i
-            box = pygame.Rect(x, 120, 545, 650)
-            pygame.draw.rect(sheet, PANEL, box, border_radius=9)
-            pygame.draw.rect(sheet, LINE, box, 2, border_radius=9)
-            sheet.blit(h2.render(label, True, LIGHT), (x + 28, 142))
-            sheet.blit(body.render(note, True, MUTED), (x + 28, 176))
-            width = max(1, round(img.get_width() * scale))
-            height = max(1, round(img.get_height() * scale))
-            scaled = pygame.transform.smoothscale(img, (width, height))
-            stage_center = (x + 272, 440)
-            sheet.blit(scaled, scaled.get_rect(center=stage_center))
-            pygame.draw.line(sheet, LINE, (x + 25, 718), (x + 520, 718))
-            measure = f"MAX HALF-BEAM  {beam:.1f}  /  FULL BEAM {beam * 2:.1f}"
-            sheet.blit(body.render(measure, True, ACCENT), (x + 28, 732))
-        sheet.blit(body.render("MAX BODY WIDTH -10.7%  /  PHYSICS + WEAPON SLOTS UNCHANGED",
-                               True, ACCENT), (48, 798))
-        out = Path(output)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        pygame.image.save(sheet, str(out))
-        return out
+            left = 35 + index * 565
+            stage = pygame.Rect(left, 122, 545, 650)
+            pygame.draw.rect(sheet, PANEL, stage, border_radius=9)
+            pygame.draw.rect(sheet, LINE, stage, 2, border_radius=9)
+            sheet.blit(sub.render(title, True, LIGHT), (left + 27, 140))
+            sheet.blit(desc.render(note, True, MUTED), (left + 27, 172))
+            w, h = max(1, round(image.get_width() * scale)), max(1, round(image.get_height() * scale))
+            img = pygame.transform.smoothscale(image, (w, h))
+            sheet.blit(img, img.get_rect(center=(left + 272, 443)))
+            pygame.draw.line(sheet, LINE, (left + 25, 709), (left + 520, 709))
+            sheet.blit(desc.render("LENGTH x WIDTH  " + dimensions, True, ACCENT), (left + 27, 722))
+            sheet.blit(desc.render(stats, True, MUTED), (left + 27, 746))
+        sheet.blit(desc.render(
+            "114:24 = 4.75:1   /   NEW PHYSICAL HULL + MOUNT LAYOUT   /   SAVE SLOT IDS STABLE",
+            True, ACCENT), (47, 803))
+        output = Path(output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        pygame.image.save(sheet, str(output))
+        return output
     finally:
         pygame.quit()
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--output", default="bastion-before-after.png")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", default="bastion-before-after.png")
+    args = parser.parse_args()
     print(render(args.output))

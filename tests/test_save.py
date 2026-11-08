@@ -142,3 +142,22 @@ def test_reinstall_from_storage_after_v2_load(monkeypatch, tmp_path):
     assert "missile_s" in restored.captain.storage
     assert restored.captain.credits == before
     assert restored.player.layout_turn_factor > 0
+
+
+
+def test_v2_bastion_save_survives_capital_hull_reframe(monkeypatch, tmp_path):
+    """Existing slot-indexed saves follow the new mount coordinates."""
+    world = World(seed=9, first_event=1e9)
+    ship = Ship("bastion", (3000, 3500))
+    world.player = ship
+    ship.weapons[0].ammo = max(0, ship.weapons[0].ammo - 2)
+    world.captain.storage = ["missile_m", "repair_gel"]
+    restored, _ = loaded_world(monkeypatch, tmp_path, world)
+    assert restored is not None
+    p = restored.player
+    assert len(p.fit) == 11 and p.fit == ship.fit
+    assert [w.index for w in p.weapons] == [w.index for w in ship.weapons]
+    assert [tuple(w.slot.pos) for w in p.weapons] == [
+        (35, 0), (-30, 0), (-4, -8.5), (-4, 8.5)]
+    assert [w.ammo for w in p.weapons] == [w.ammo for w in ship.weapons]
+    assert restored.captain.storage == ["missile_m", "repair_gel"]
