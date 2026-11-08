@@ -19,9 +19,9 @@ from .ship import CARGO_MASS, SUBSYSTEM_NAME, SUBSYSTEMS, Ship
 from .world import AMMO_PACK, MODULE_RESALE
 
 UI, DIM, ACCENT, WARN = ui.TEXT, ui.DIM, ui.ACCENT, ui.WARN
-TAB_ICON = ("utility", "hull", "gun", "cargo")
+TAB_ICON = ("utility", "hull", "gun", "cargo", "cargo")
 
-TABS = ("Сервис", "Верфь", "Оснащение", "Склад")
+TABS = ("Сервис", "Верфь", "Оснащение", "Склад", "Контракты")
 GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
 DENSE = 0.8          # «плотная Пелена» для сравнения характеристик
 
@@ -251,9 +251,11 @@ class PortUI:
             (f"Очистить налёт филаментов ({C.CLEAN_COST} КК)", world.clean_hull),
             (f"Погасить долг ({cap.debt} КК)" if cap.debt else "Долгов нет", world.pay_debt_action),
             (f"Лечение травмы ({C.MEDICAL_COST} КК)" if cap.trauma else "Капитан здоров", world.heal),
-            (world.contract_label("salt"), lambda: world.contract_action("salt")),
-            (world.contract_label("pirates"), lambda: world.contract_action("pirates")),
         ]
+
+    def contract_items(self, world):
+        """Contract board order is stable for mouse and keyboard activation."""
+        return [(key, world.contract_label(key)) for key in world.CONTRACTS]
 
     def picker_items(self, world):
         """Модули для выбранного слота: сначала со склада, потом из магазина."""
@@ -484,6 +486,8 @@ class PortUI:
         tab = TABS[self.tab]
         if tab == "Сервис":
             return len(self.service_items(world))
+        if tab == "Контракты":
+            return len(self.contract_items(world))
         if tab == "Верфь":
             return len(PLAYER_HULLS)
         if tab == "Оснащение":
@@ -506,6 +510,13 @@ class PortUI:
                 label, action = items[self.sel]
                 ok = action()
                 self.say(("Готово: " if ok else "Недоступно: ") + label, ACCENT if ok else WARN)
+        elif tab == "Контракты":
+            items = self.contract_items(world)
+            if 0 <= self.sel < len(items):
+                key, label = items[self.sel]
+                ok = world.contract_action(key)
+                self.say(("Готово: " if ok else "Недоступно: ") + label,
+                         ACCENT if ok else WARN)
         elif tab == "Верфь":
             hull = PLAYER_HULLS[self.sel]
             err = world.buy_hull(hull.key)
@@ -622,6 +633,8 @@ class PortUI:
             self._shipyard(world, body)
         elif tab == "Оснащение":
             self._fitting(world, body)
+        elif tab == "Контракты":
+            self._contracts(world, body)
         else:
             self._storage(world, body)
 
@@ -875,6 +888,28 @@ class PortUI:
         self.text(f"Корпус {int(p.hp)}/{int(p.hull.hp)}   Броня {int(p.armor)}/{int(p.armor_max)}   "
                   f"Налёт {int(p.fouling * 100)}%", (body.x, y), DIM)
         self._stats(world, body.right - 300, body.y)
+
+    def _contracts(self, world, body):
+        """Accept and turn in contracts at the port; rows are clickable."""
+        self.text("ДОСКА КОНТРАКТОВ", (body.x, body.y), UI, self.big)
+        self.text("Примите задание, выполните условия в море и вернитесь в порт.",
+                  (body.x, body.y + 44), DIM, self.small)
+        for i, (key, label) in enumerate(self.contract_items(world)):
+            y = body.y + 94 + i * 94
+            rect = pygame.Rect(body.x, y, min(760, body.w), 76)
+            self.zones.append((rect, "row", i))
+            state = world.contracts.get(key)
+            status = "ДОСТУПЕН" if state is None else (
+                "ВЫПОЛНЕН" if state["status"] == "done" else "В РАБОТЕ")
+            if i == self.sel:
+                ui.selection(self.screen, rect)
+            elif rect.collidepoint(self.mouse):
+                pygame.draw.rect(self.screen, ui.FAINT, rect, 1)
+            self.text(label, (rect.x + 12, rect.y + 8), UI, self.small)
+            self.text(status, (rect.x + 12, rect.y + 39),
+                      ACCENT if status == "ВЫПОЛНЕН" else DIM, self.small)
+        self.text("ЛКМ / ENTER — принять или сдать выбранный контракт",
+                  (body.x, body.bottom - 38), DIM, self.small)
 
     def _shipyard(self, world, body):
         """UX 2.0: see the ship first, compare, then explicitly purchase.
