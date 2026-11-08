@@ -980,11 +980,14 @@ class World:
         self.player.pos = self.port_position() + Vector2(0, -C.PORT_RADIUS - 40)
         self.player.angle = -90
 
-    def market_price(self, kind, buying=False):
+    def market_price(self, kind, buying=False, port_key=None):
         """Fixed local prices; buying costs more than selling at the same hub."""
         if kind not in RESOURCES:
             raise ValueError("Неизвестный ресурс")
-        multiplier = C.MARKET_MULTIPLIERS[self.active_port][kind]
+        hub = port_key or self.active_port
+        if hub not in C.MARKET_MULTIPLIERS:
+            raise ValueError("Неизвестный порт")
+        multiplier = C.MARKET_MULTIPLIERS[hub][kind]
         sale = max(1, round(RESOURCES[kind].price * multiplier))
         return max(sale + 1, math.ceil(sale * C.MARKET_BUY_MARKUP)) if buying else sale
 
@@ -999,6 +1002,24 @@ class World:
             return False
         self.captain.credits -= cost
         self.captain.cargo[kind] = self.captain.cargo.get(kind, 0) + quantity
+        return True
+
+    def sell_resource(self, kind, quantity=C.MARKET_PACK_SIZE):
+        """Sell up to one pack, preserving the rest of the hold."""
+        if kind not in RESOURCES or type(quantity) is not int or quantity <= 0:
+            return False
+        have = self.captain.cargo.get(kind, 0)
+        if have <= 0:
+            return False
+        take = min(have, quantity)
+        value = int(self.market_price(kind) * take)
+        if value <= 0:
+            return False
+        self.captain.cargo[kind] = have - take
+        if self.captain.cargo[kind] <= 1e-6:
+            del self.captain.cargo[kind]
+        self.captain.credits += value
+        self.complete("sell")
         return True
 
     def cargo_value(self):

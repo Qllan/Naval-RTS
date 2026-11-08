@@ -16,12 +16,13 @@ from .gfx.ship_art import ShipArt
 from .hulls import PLAYER_HULLS
 from .modules import AMMO, CATEGORY_NAME, MODULES, SIZE_NAME, WeaponDef, module_stats
 from .ship import CARGO_MASS, SUBSYSTEM_NAME, SUBSYSTEMS, Ship
+from .entities import RESOURCES
 from .world import AMMO_PACK, MODULE_RESALE
 
 UI, DIM, ACCENT, WARN = ui.TEXT, ui.DIM, ui.ACCENT, ui.WARN
-TAB_ICON = ("utility", "hull", "gun", "cargo", "cargo")
+TAB_ICON = ("utility", "hull", "gun", "cargo", "cargo", "cargo")
 
-TABS = ("Сервис", "Верфь", "Оснащение", "Склад", "Контракты")
+TABS = ("Сервис", "Верфь", "Оснащение", "Склад", "Контракты", "Торговля")
 GROUP_NAME = {1: "ЛКМ", 2: "ПКМ", 0: "выкл."}
 DENSE = 0.8          # «плотная Пелена» для сравнения характеристик
 
@@ -251,13 +252,21 @@ class PortUI:
             (f"Очистить налёт филаментов ({C.CLEAN_COST} КК)", world.clean_hull),
             (f"Погасить долг ({cap.debt} КК)" if cap.debt else "Долгов нет", world.pay_debt_action),
             (f"Лечение травмы ({C.MEDICAL_COST} КК)" if cap.trauma else "Капитан здоров", world.heal),
-            (f"Купить {C.MARKET_PACK_SIZE} соль-металла "
-             f"({world.market_price('salt', True) * C.MARKET_PACK_SIZE} КК)",
-             lambda: world.buy_resource("salt")),
-            (f"Купить {C.MARKET_PACK_SIZE} филаментов "
-             f"({world.market_price('filament', True) * C.MARKET_PACK_SIZE} КК)",
-             lambda: world.buy_resource("filament")),
         ]
+
+    def trade_items(self, world):
+        """Pairs of buy/sell actions; positions match clickable rows."""
+        items = []
+        for kind, resource in RESOURCES.items():
+            price_buy = world.market_price(kind, True) * C.MARKET_PACK_SIZE
+            price_sell = world.market_price(kind)
+            quantity = min(C.MARKET_PACK_SIZE, world.captain.cargo.get(kind, 0))
+            items.append((f"Купить {C.MARKET_PACK_SIZE} · {resource.name} — {price_buy} КК",
+                          lambda k=kind: world.buy_resource(k)))
+            items.append((f"Продать до {C.MARKET_PACK_SIZE} · {resource.name} "
+                          f"({quantity:.1f} на борту) — {price_sell} КК/ед.",
+                          lambda k=kind: world.sell_resource(k)))
+        return items
 
     def contract_items(self, world):
         """Contract board order is stable for mouse and keyboard activation."""
@@ -494,6 +503,8 @@ class PortUI:
             return len(self.service_items(world))
         if tab == "Контракты":
             return len(self.contract_items(world))
+        if tab == "Торговля":
+            return len(self.trade_items(world))
         if tab == "Верфь":
             return len(PLAYER_HULLS)
         if tab == "Оснащение":
@@ -516,6 +527,13 @@ class PortUI:
                 label, action = items[self.sel]
                 ok = action()
                 self.say(("Готово: " if ok else "Недоступно: ") + label, ACCENT if ok else WARN)
+        elif tab == "Торговля":
+            items = self.trade_items(world)
+            if 0 <= self.sel < len(items):
+                label, action = items[self.sel]
+                ok = action()
+                self.say(("Сделка: " if ok else "Недоступно: ") + label,
+                         ACCENT if ok else WARN)
         elif tab == "Контракты":
             items = self.contract_items(world)
             if 0 <= self.sel < len(items):
@@ -645,6 +663,8 @@ class PortUI:
             self._fitting(world, body)
         elif tab == "Контракты":
             self._contracts(world, body)
+        elif tab == "Торговля":
+            self._trade(world, body)
         else:
             self._storage(world, body)
 
@@ -898,6 +918,29 @@ class PortUI:
         self.text(f"Корпус {int(p.hp)}/{int(p.hull.hp)}   Броня {int(p.armor)}/{int(p.armor_max)}   "
                   f"Налёт {int(p.fouling * 100)}%", (body.x, y), DIM)
         self._stats(world, body.right - 300, body.y)
+
+    def _trade(self, world, body):
+        """Dedicated market terminal; prices compare both ports."""
+        self.text("ТОРГОВЫЙ ТЕРМИНАЛ", (body.x, body.y), UI, self.big)
+        self.text("Цены за единицу товара · Покупка и продажа партиями до 10 ед.",
+                  (body.x, body.y + 43), DIM, self.small)
+        rows = [(label, UI) for label, _ in self.trade_items(world)]
+        self._list(rows, body.x + 8, body.y + 90, 675, self.sel, row_h=34)
+        x, y = body.right - 302, body.y + 90
+        self.text("СРАВНЕНИЕ РЫНКОВ", (x, y), UI, self.small)
+        y += 38
+        for kind, resource in RESOURCES.items():
+            here = world.market_price(kind)
+            there = world.market_price(kind, port_key=(
+                "port" if world.active_port == "platform" else "platform"))
+            self.text(resource.name, (x, y), DIM, self.small)
+            self.text(f"{here} / {there} КК", (x, y + 24),
+                      ACCENT if there > here else UI, self.small)
+            y += 75
+        self.text(f"Трюм: {world.cargo_used:.1f}/{world.cargo_capacity:.0f}",
+                  (body.x, body.bottom - 35), DIM, self.small)
+        self.text("Цены: здесь / другой порт", (x, body.bottom - 35),
+                  DIM, self.small)
 
     def _contracts(self, world, body):
         """Accept and turn in contracts at the port; rows are clickable."""
