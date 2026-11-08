@@ -21,11 +21,15 @@ def event_for_cycle(seed, cycle):
     if cycle < 0:
         return None
     rng = random.Random(f"market-event:{seed}:{cycle}")
+    kind = "demand" if cycle % 2 == 0 else "disruption"
+    hub, good = (rng.choice(EVENT_HUBS), rng.choice(EVENT_GOODS)) if kind == "demand" else rng.choice((
+        ("port", "filament"), ("port", "condensate"),
+        ("platform", "salt"), ("platform", "condensate")))
     return {
         "cycle": cycle,
-        "type": "demand" if cycle % 2 == 0 else "disruption",
-        "hub": rng.choice(EVENT_HUBS),
-        "kind": rng.choice(EVENT_GOODS),
+        "type": kind,
+        "hub": hub,
+        "kind": good,
         "start": EVENT_START + cycle * EVENT_PERIOD,
         "end": EVENT_START + cycle * EVENT_PERIOD + EVENT_DURATION,
     }
