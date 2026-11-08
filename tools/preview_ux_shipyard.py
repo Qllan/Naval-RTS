@@ -25,6 +25,7 @@ SCENES = (
     ("01 / BROWSE CAPITAL HULL", "bastion", 12000, 0),
     ("02 / SMALL SHIP COMPARISON", "needle", 12000, 0),
     ("03 / NOT ENOUGH CREDITS", "bastion", 300, 0),
+    ("04 / ALREADY OWNED", "manta", 12000, 0),
 )
 
 
@@ -32,7 +33,7 @@ def render(output):
     pygame.init()
     try:
         game_screen = pygame.display.set_mode((1280, 720))
-        sheet = pygame.Surface((2616, 1538))
+        sheet = pygame.Surface((2616, 1596))
         sheet.fill(ui.PANEL_RGB)
         heading = pygame.font.Font(None, 43)
         caption = pygame.font.Font(None, 23)
@@ -59,11 +60,8 @@ def render(output):
             pygame.draw.rect(sheet, ui.ACCENT, tab, 1)
             sheet.blit(caption.render(label, True, ui.TEXT), (tab.x + 11, tab.y + 5))
         sheet.blit(caption.render(
-            "A hull click selects only. The dedicated BUY action confirms the purchase.",
-            True, ui.TEXT), (1345, 1065))
-        sheet.blit(caption.render(
-            "Full trade-in pricing, existing equipment and save data remain unchanged.",
-            True, ui.DIM), (1345, 1102))
+            "CLICK TO SELECT / ENTER OR BUY TO CONFIRM / NO ACCIDENTAL PURCHASE",
+            True, ui.DIM), (35, 1552))
         dest = Path(output)
         dest.parent.mkdir(parents=True, exist_ok=True)
         pygame.image.save(sheet, str(dest))

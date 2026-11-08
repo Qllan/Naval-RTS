@@ -916,9 +916,11 @@ class PortUI:
         pygame.draw.line(self.screen, ui.LINE,
                          (offer.x + 15, offer.y + 327),
                          (offer.right - 15, offer.y + 327))
-        self.text("К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА", (offer.x + 15, offer.y + 340),
-                  DIM, self.small)
-        self.text(f"{cost:,} КК", (offer.x + 15, offer.y + 361), UI, self.big)
+        owned = hull.key == world.player.hull.key
+        self.text("ТЕКУЩИЙ КОРПУС" if owned else "К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА",
+                  (offer.x + 15, offer.y + 340), DIM, self.small)
+        self.text("УЖЕ ВО ФЛОТЕ" if owned else f"{cost:,} КК",
+                  (offer.x + 15, offer.y + 361), UI, self.big)
         issue = hull_purchase_issue(world, hull)
         if issue is not None:
             self.text(issue, (offer.x + 15, offer.bottom - 82), WARN, self.small)

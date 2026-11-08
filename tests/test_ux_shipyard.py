@@ -103,4 +103,25 @@ def test_ux_shipyard_review_png_is_real_ui(tmp_path):
     render(output)
     assert output.exists() and output.stat().st_size > 25000
     img = pygame.image.load(str(output))
-    assert img.get_size() == (2616, 1538)
+    assert img.get_size() == (2616, 1596)
+
+
+
+def test_owned_ship_offer_is_not_described_as_a_trade_in_purchase():
+    world, port = prepare_shipyard()
+    port.sel = next(i for i, hull in enumerate(PLAYER_HULLS)
+                    if hull.key == world.player.hull.key)
+    seen = []
+    original = port.text
+
+    def record(value, pos, *args, **kwargs):
+        seen.append(str(value))
+        return original(value, pos, *args, **kwargs)
+
+    port.text = record
+    port.draw(world, 0.4)
+    assert "ТЕКУЩИЙ КОРПУС" in seen
+    assert "УЖЕ ВО ФЛОТЕ" in seen
+    assert "К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА" not in seen
+    assert not any(kind == "button" and name == "purchase_hull"
+                   for _, kind, name in port.zones)
