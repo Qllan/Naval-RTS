@@ -81,3 +81,22 @@ def test_authoritative_host_has_repeatable_headless_steps():
                 host.clock.tick, round(host.world.t, 6))
 
     assert run() == run()
+
+
+
+def test_coalescing_keeps_early_one_shot_actions_without_repeating_them():
+    host = ServerSimulation(World(seed=9, first_event=1e9))
+    host.submit("local", {"seq": 1, "throttle": 1.0, "activate": [0],
+                          "toggle_spotlight": True, "pips": ["engines"]})
+    host.submit("local", {"seq": 2, "throttle": 0.25, "activate": [1],
+                          "pips": ["weapons"]})
+    queued = host._pending
+    assert queued.throttle == 0.25
+    assert queued.activate == (0, 1)
+    assert queued.pips == ("engines", "weapons")
+    assert queued.toggle_spotlight
+    host.tick()
+    assert host.world.spotlight
+    assert host._pending is None
+    host.tick()
+    assert host.world.spotlight  # one-shot toggle is not repeated

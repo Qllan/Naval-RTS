@@ -26,6 +26,8 @@ jobs:
         run: python -m pytest -q
       - name: Spatial lookup benchmark (synthetic data, no gameplay)
         run: python tools/benchmark_spatial.py --check
+      - name: Network interest benchmark (no gameplay, deterministic)
+        run: python tools/check_network_foundation.py --check
       - name: Render new hull preview
         env:
           SDL_VIDEODRIVER: dummy

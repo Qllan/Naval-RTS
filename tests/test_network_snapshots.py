@@ -103,3 +103,60 @@ def test_sector_function_handles_negative_coordinates_and_rejects_zero():
     assert sector_for(Vector2(2000, -1)) == "1:-1"
     with pytest.raises(ValueError):
         sector_for(Vector2(), size=0)
+
+
+
+def test_shared_position_grid_matches_reference_interest_selection():
+    import random
+    from pygame.math import Vector2
+    from nine.spatial import PositionGrid
+
+    rng = random.Random(500)
+    objects = [SimpleNamespace(pos=Vector2(rng.uniform(-6000, 6000),
+                                            rng.uniform(-6000, 6000)))
+               for _ in range(500)]
+    grid = PositionGrid(objects)
+    for _ in range(50):
+        center = Vector2(rng.uniform(-5500, 5500), rng.uniform(-5500, 5500))
+        radius = 1200
+        expected = []
+        for i, o in enumerate(objects):
+            dx, dy = o.pos.x - center.x, o.pos.y - center.y
+            distance_sq = dx * dx + dy * dy
+            if distance_sq <= radius * radius:
+                expected.append((distance_sq, i, o))
+        expected.sort(key=lambda x: (x[0], x[1]))
+        assert grid.query_radius(center, radius) == expected
+
+
+def test_interest_snapshots_match_with_and_without_shared_index():
+    from nine.spatial import PositionGrid
+
+    world = World(seed=4, first_event=1e9)
+    world.player.pos.update(4000, 4000)
+    world.pirates = [stub_pirate(3990 + i * 15, 4000) for i in range(90)]
+    indexed = SnapshotStream(radius=400, max_entities=16)
+    baseline = SnapshotStream(radius=400, max_entities=16)
+    index = PositionGrid(p.ship for p in world.pirates)
+    frame_a = indexed.build(world, 0, index=index)
+    frame_b = baseline.build(world, 0)
+    assert frame_a == frame_b
+    world.pirates[0].ship.pos.x += 8
+    index = PositionGrid(p.ship for p in world.pirates)
+    assert indexed.build(world, 1, index=index) == baseline.build(world, 1)
+
+
+def test_position_grid_reduces_interest_checks_on_sparse_synthetic_scene():
+    import random
+    from pygame.math import Vector2
+    from nine.spatial import PositionGrid
+
+    rng = random.Random(2026)
+    objects = [SimpleNamespace(pos=Vector2(rng.uniform(0, 16000),
+                                            rng.uniform(0, 16000)))
+               for _ in range(1200)]
+    grid = PositionGrid(objects)
+    queries = [Vector2(rng.uniform(0, 16000), rng.uniform(0, 16000))
+               for _ in range(120)]
+    candidate_count = sum(1 for pos in queries for _ in grid.cell_candidates(pos, 950))
+    assert candidate_count * 8 < len(objects) * len(queries)

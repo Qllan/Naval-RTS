@@ -68,22 +68,26 @@ class SnapshotStream:
         self._last_tick = None
         self._last_frame = None
 
-    def _visible_ships(self, world):
+    def _visible_ships(self, world, index=None):
         player = world.player
         radius_sq = self.radius * self.radius
-        candidates = []
-        for order, pirate in enumerate(world.pirates):
-            ship = pirate.ship
-            if ship is player or not ship.alive:
-                continue
-            dx, dy = ship.pos.x - player.pos.x, ship.pos.y - player.pos.y
-            distance_sq = dx * dx + dy * dy
-            if distance_sq <= radius_sq:
-                candidates.append((distance_sq, order, ship))
-        candidates.sort(key=lambda row: (row[0], row[1]))
+        if index is not None:
+            candidates = [entry for entry in index.query_radius(player.pos, self.radius)
+                          if entry[2] is not player and entry[2].alive]
+        else:
+            candidates = []
+            for order, pirate in enumerate(world.pirates):
+                ship = pirate.ship
+                if ship is player or not ship.alive:
+                    continue
+                dx, dy = ship.pos.x - player.pos.x, ship.pos.y - player.pos.y
+                distance_sq = dx * dx + dy * dy
+                if distance_sq <= radius_sq:
+                    candidates.append((distance_sq, order, ship))
+            candidates.sort(key=lambda row: (row[0], row[1]))
         return [player] + [row[2] for row in candidates[:self.max_entities - 1]]
 
-    def build(self, world, tick):
+    def build(self, world, tick, index=None):
         if type(tick) is not int or tick < 0:
             raise ValueError("Tick must be a nonnegative integer")
         if self._last_tick is not None:
@@ -92,7 +96,7 @@ class SnapshotStream:
             if tick == self._last_tick:
                 return self._last_frame
 
-        ships = self._visible_ships(world)
+        ships = self._visible_ships(world, index=index)
         states = {self.registry.id_for(s): ship_state(s, self.registry.id_for(s))
                   for s in ships}
         full = self._last_tick is None or tick % self.full_every == 0

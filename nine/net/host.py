@@ -5,9 +5,12 @@ This adapter deliberately refuses other owners rather than pretending that
 multiple network clients can already share a World.
 """
 
+from dataclasses import replace
+
 from .clock import FixedTickClock
 from .commands import PlayerCommand
 from .snapshots import SnapshotStream
+from ..spatial import PositionGrid
 from ..world import Controls, World
 
 
@@ -25,6 +28,8 @@ class ServerSimulation:
         self.owner_id = owner_id
         self.clock = FixedTickClock(hz=hz)
         self.stream = SnapshotStream()
+        self._interest_index_tick = None
+        self._interest_index = None
         self._last_seq = -1
         self._pending = None
         self.accepted = 0
@@ -40,7 +45,17 @@ class ServerSimulation:
             self.rejected += 1
             return False
         self._last_seq = command.seq
-        # One newest command per tick: bounded queue, no backlog of inputs.
+        # Keep latest movement, but preserve one-shot actions from packets
+        # received within the same tick. The coalesced input stays bounded.
+        if self._pending is not None:
+            before = self._pending
+            command = replace(
+                command,
+                activate=tuple(dict.fromkeys(before.activate + command.activate))[:4],
+                pips=(before.pips + command.pips)[:4],
+                cycle_ammo=before.cycle_ammo or command.cycle_ammo,
+                toggle_spotlight=before.toggle_spotlight or command.toggle_spotlight,
+            )
         self._pending = command
         self.accepted += 1
         return True
@@ -65,4 +80,7 @@ class ServerSimulation:
         """
         if caller_id != self.owner_id:
             raise AuthorityError("Only the pilot can view this stream")
-        return self.stream.build(self.world, self.clock.tick)
+        if self._interest_index_tick != self.clock.tick:
+            self._interest_index = PositionGrid(p.ship for p in self.world.pirates)
+            self._interest_index_tick = self.clock.tick
+        return self.stream.build(self.world, self.clock.tick, index=self._interest_index)
