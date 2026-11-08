@@ -7,6 +7,7 @@ multiple network clients can already share a World.
 
 from .clock import FixedTickClock
 from .commands import PlayerCommand
+from .snapshots import SnapshotStream
 from ..world import Controls, World
 
 
@@ -23,6 +24,7 @@ class ServerSimulation:
         self.world = world if world is not None else World()
         self.owner_id = owner_id
         self.clock = FixedTickClock(hz=hz)
+        self.stream = SnapshotStream()
         self._last_seq = -1
         self._pending = None
         self.accepted = 0
@@ -54,3 +56,13 @@ class ServerSimulation:
         for _ in range(count):
             self.tick()
         return count
+
+    def snapshot(self, caller_id):
+        """Authoritative interest-filtered state for the current owner.
+
+        This identity check does not authenticate connections. A future
+        transport must authenticate the caller before invoking the host.
+        """
+        if caller_id != self.owner_id:
+            raise AuthorityError("Only the pilot can view this stream")
+        return self.stream.build(self.world, self.clock.tick)
