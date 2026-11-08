@@ -514,7 +514,9 @@ class PortUI:
             items = self.contract_items(world)
             if 0 <= self.sel < len(items):
                 key, label = items[self.sel]
-                ok = world.contract_action(key)
+                state = world.contracts.get(key)
+                ok = (world.renew_contract(key) if state and state["status"] == "done"
+                      else world.contract_action(key))
                 self.say(("Готово: " if ok else "Недоступно: ") + label,
                          ACCENT if ok else WARN)
         elif tab == "Верфь":
@@ -900,7 +902,7 @@ class PortUI:
             self.zones.append((rect, "row", i))
             state = world.contracts.get(key)
             status = "ДОСТУПЕН" if state is None else (
-                "ВЫПОЛНЕН" if state["status"] == "done" else "В РАБОТЕ")
+                "НОВЫЙ ЗАКАЗ" if state["status"] == "done" else "В РАБОТЕ")
             if i == self.sel:
                 ui.selection(self.screen, rect)
             elif rect.collidepoint(self.mouse):
@@ -908,7 +910,7 @@ class PortUI:
             self.text(label, (rect.x + 12, rect.y + 8), UI, self.small)
             self.text(status, (rect.x + 12, rect.y + 39),
                       ACCENT if status == "ВЫПОЛНЕН" else DIM, self.small)
-        self.text("ЛКМ / ENTER — принять или сдать выбранный контракт",
+        self.text("ЛКМ / ENTER — принять, сдать или обновить контракт",
                   (body.x, body.bottom - 38), DIM, self.small)
 
     def _shipyard(self, world, body):
