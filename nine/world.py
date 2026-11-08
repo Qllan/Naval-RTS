@@ -20,6 +20,7 @@ from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship, fit_problems
 from .spatial import ShipCollisionGrid, ship_overlaps
 from .veil import Veil
 from .trade_traffic import TradeTraffic
+from .market import MAX_STOCK, apply_deliveries, new_stocks, unit_price
 
 MODULE_RESALE = 0.5
 HULL_RESALE = 0.5
@@ -109,6 +110,8 @@ class World:
             Vector2(C.PLATFORM_CANDIDATES[0]))
         self.active_port = "port"
         self.trade_traffic = TradeTraffic(self.port, self.platform, self.islands)
+        self.market_stock = new_stocks()
+        self.market_last_time = self.t
         self._aground_cd = 0.0
         for _ in range(280):
             self._spawn_node()
@@ -304,6 +307,7 @@ class World:
 
     def update(self, dt, ctl: Controls):
         self.t += dt
+        self.update_market()
         p = self.player
         self.events.update(self.t, p.pos)
         for ev in self.events.started:
@@ -1037,20 +1041,33 @@ class World:
         self.player.pos = self.port_position() + Vector2(0, -C.PORT_RADIUS - 40)
         self.player.angle = -90
 
+    def update_market(self):
+        """Count convoy arrivals once since the last market tick."""
+        if self.t < self.market_last_time:
+            # Console time travel cannot generate duplicate historic deliveries.
+            self.market_last_time = self.t
+            return
+        arrivals = apply_deliveries(self.market_stock, self.trade_traffic,
+                                    self.market_last_time, self.t)
+        self.market_last_time = self.t
+        if arrivals["port"] or arrivals["platform"]:
+            self.say("Торговые конвои пополнили складские запасы.")
+
     def market_price(self, kind, buying=False, port_key=None):
-        """Fixed local prices; buying costs more than selling at the same hub."""
+        """Demand responds to local scarcity, with a guaranteed local spread."""
+        return unit_price(port_key or self.active_port, kind,
+                          self.market_stock, buying)
+
+    def market_available(self, kind, port_key=None):
         if kind not in RESOURCES:
-            raise ValueError("Неизвестный ресурс")
-        hub = port_key or self.active_port
-        if hub not in C.MARKET_MULTIPLIERS:
-            raise ValueError("Неизвестный порт")
-        multiplier = C.MARKET_MULTIPLIERS[hub][kind]
-        sale = max(1, round(RESOURCES[kind].price * multiplier))
-        return max(sale + 1, math.ceil(sale * C.MARKET_BUY_MARKUP)) if buying else sale
+            return 0
+        return self.market_stock[port_key or self.active_port][kind]
 
     def buy_resource(self, kind, quantity=C.MARKET_PACK_SIZE):
         """Purchase market cargo without exceeding credit or hold limits."""
-        if kind not in RESOURCES or type(quantity) is not int or quantity <= 0:
+        if (kind not in RESOURCES or type(quantity) is not int
+                or not 1 <= quantity <= C.MARKET_PACK_SIZE
+                or self.market_available(kind) < quantity):
             return False
         cost = self.market_price(kind, buying=True) * quantity
         if self.captain.debt or self.captain.credits < cost:
@@ -1059,6 +1076,7 @@ class World:
             return False
         self.captain.credits -= cost
         self.captain.cargo[kind] = self.captain.cargo.get(kind, 0) + quantity
+        self.market_stock[self.active_port][kind] -= quantity
         return True
 
     def sell_resource(self, kind, quantity=C.MARKET_PACK_SIZE):
@@ -1076,6 +1094,8 @@ class World:
         if self.captain.cargo[kind] <= 1e-6:
             del self.captain.cargo[kind]
         self.captain.credits += value
+        self.market_stock[self.active_port][kind] = min(
+            MAX_STOCK, self.market_available(kind) + int(take))
         self.complete("sell")
         return True
 
@@ -1085,6 +1105,10 @@ class World:
     def sell_cargo(self):
         value = self.cargo_value()
         self.captain.credits += value
+        for kind, amount in self.captain.cargo.items():
+            if kind in RESOURCES:
+                self.market_stock[self.active_port][kind] = min(
+                    MAX_STOCK, self.market_available(kind) + int(amount))
         self.captain.cargo = {}
         if value > 0:
             self.complete("sell")
