@@ -63,8 +63,9 @@ def test_mining_rate_depends_on_modules(world):
 def test_selling(world):
     world.captain.cargo = {"condensate": 10}
     credits = world.captain.credits
-    assert world.sell_cargo() == 220
-    assert world.captain.credits == credits + 220 and world.cargo_used == 0
+    value = world.market_price("condensate") * 10
+    assert world.sell_cargo() == value
+    assert world.captain.credits == credits + value and world.cargo_used == 0
 
 
 def test_death_capsule_insurance_and_debt(world):

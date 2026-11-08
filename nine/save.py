@@ -7,6 +7,7 @@
 import base64
 import json
 import os
+import math
 
 import numpy as np
 from pygame.math import Vector2
@@ -61,6 +62,8 @@ def to_dict(world):
         "codex": world.codex,
         "goals": sorted(world.goals_done),
         "contracts": world.contracts,
+        "market": {"stock": world.market_stock,
+                   "last_time": world.market_last_time},
     }
 
 
@@ -103,6 +106,20 @@ def from_dict(d):
     _validate_fit(s["hull"], s["fit"])
     world = World(d["seed"])
     world.t = d["t"]
+    # Legacy saves start from fresh local stocks, without replaying older trips.
+    from .market import valid_stocks
+    market = d.get("market")
+    if isinstance(market, dict):
+        last = market.get("last_time")
+        if (valid_stocks(market.get("stock"))
+                and type(last) in (int, float) and math.isfinite(last)
+                and 0 <= last <= world.t):
+            world.market_stock = {k: dict(v) for k, v in market["stock"].items()}
+            world.market_last_time = float(last)
+        else:
+            world.market_last_time = world.t
+    else:
+        world.market_last_time = world.t
     world.clock_offset = d.get("clock_offset", 0.0)
     cap = world.captain
     for k, v in d["captain"].items():
