@@ -10,6 +10,7 @@ import math
 from . import config as C
 from .entities import RESOURCES
 from .trade_traffic import PORT_DWELL
+from .market_events import delivery_fraction
 
 
 MAX_STOCK = 500
@@ -49,12 +50,32 @@ def arrivals_between(traffic, previous, current):
     return totals
 
 
-def apply_deliveries(stock, traffic, previous, current):
-    """Apply convoy cargo arrivals once, clamped to bounded warehouse space."""
+def apply_deliveries(stock, traffic, previous, current, seed=None):
+    """Apply scheduled arrivals, reducing disrupted cargo at arrival time.
+
+    Counted interval is (previous, current]; historical arrivals cannot be
+    replayed by another market tick after loading the saved cursor.
+    """
     counts = arrivals_between(traffic, previous, current)
-    for hub, count in counts.items():
-        for kind, amount in ARRIVAL_CARGO[hub].items():
-            stock[hub][kind] = min(MAX_STOCK, stock[hub][kind] + count * amount)
+    if seed is None or current <= previous:
+        for hub, count in counts.items():
+            for kind, amount in ARRIVAL_CARGO[hub].items():
+                stock[hub][kind] = min(MAX_STOCK, stock[hub][kind] + count * amount)
+        return counts
+
+    period = traffic.period
+    for offset in (0.0, period / 2):
+        for hub, phase in (("platform", PORT_DWELL + traffic.sailing_time),
+                           ("port", period)):
+            first = phase - offset
+            lo = math.floor((previous - first) / period) + 1
+            hi = math.floor((current - first) / period)
+            for cycle in range(lo, hi + 1):
+                arrival = first + cycle * period
+                for kind, amount in ARRIVAL_CARGO[hub].items():
+                    portion = delivery_fraction(seed, arrival, hub, kind)
+                    delivered = round(amount * portion)
+                    stock[hub][kind] = min(MAX_STOCK, stock[hub][kind] + delivered)
     return counts
 
 

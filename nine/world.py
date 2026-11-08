@@ -21,6 +21,7 @@ from .spatial import ShipCollisionGrid, ship_overlaps
 from .veil import Veil
 from .trade_traffic import TradeTraffic
 from .market import MAX_STOCK, apply_deliveries, new_stocks, unit_price
+from .market_events import current_event, demand_multiplier, latest_news
 
 MODULE_RESALE = 0.5
 HULL_RESALE = 0.5
@@ -1121,15 +1122,23 @@ class World:
             self.market_last_time = self.t
             return
         arrivals = apply_deliveries(self.market_stock, self.trade_traffic,
-                                    self.market_last_time, self.t)
+                                    self.market_last_time, self.t, seed=self.seed)
         self.market_last_time = self.t
         if arrivals["port"] or arrivals["platform"]:
             self.say("Торговые конвои пополнили складские запасы.")
 
+    def market_event(self):
+        return current_event(self.seed, self.t)
+
+    def market_bulletin(self):
+        return latest_news(self.seed, self.t)
+
     def market_price(self, kind, buying=False, port_key=None):
-        """Demand responds to local scarcity, with a guaranteed local spread."""
-        return unit_price(port_key or self.active_port, kind,
-                          self.market_stock, buying)
+        """Demand surges affect both bid and ask; local buying still costs more."""
+        hub = port_key or self.active_port
+        price = unit_price(hub, kind, self.market_stock)
+        price = max(1, round(price * demand_multiplier(self.seed, self.t, hub, kind)))
+        return max(price + 1, math.ceil(price * C.MARKET_BUY_MARKUP)) if buying else price
 
     def market_available(self, kind, port_key=None):
         if kind not in RESOURCES:

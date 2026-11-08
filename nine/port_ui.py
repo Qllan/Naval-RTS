@@ -945,6 +945,8 @@ class PortUI:
             y += 75
         self.text(f"Трюм: {world.cargo_used:.1f}/{world.cargo_capacity:.0f}",
                   (body.x, body.bottom - 35), DIM, self.small)
+        self.text(world.market_bulletin(), (body.x, body.bottom - 65),
+                  ACCENT, self.small)
         self.text("Цены и запасы: здесь / другой порт", (x, body.bottom - 35),
                   DIM, self.small)
 
