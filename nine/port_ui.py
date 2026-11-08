@@ -908,24 +908,27 @@ class PortUI:
             improved = (change > value) == higher
             same = abs(change - value) < 0.51
             color = DIM if same else ui.GOOD if improved else ui.BAD
-            yy = offer.y + 187 + i * 26
+            yy = offer.y + 187 + i * 23
             self.text(name.upper(), (offer.x + 15, yy), DIM, self.small)
             result = f"{value:.0f} → {change:.0f}" if not same else f"{change:.0f} ="
             self.text(result, (offer.right - 16, yy),
                       color, self.small, right=True)
         pygame.draw.line(self.screen, ui.LINE,
-                         (offer.x + 15, offer.y + 327),
-                         (offer.right - 15, offer.y + 327))
+                         (offer.x + 15, offer.y + 309),
+                         (offer.right - 15, offer.y + 309))
         owned = hull.key == world.player.hull.key
         self.text("ТЕКУЩИЙ КОРПУС" if owned else "К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА",
-                  (offer.x + 15, offer.y + 340), DIM, self.small)
+                  (offer.x + 15, offer.y + 321), DIM, self.small)
         self.text("УЖЕ ВО ФЛОТЕ" if owned else f"{cost:,} КК",
-                  (offer.x + 15, offer.y + 361), UI, self.big)
+                  (offer.x + 15, offer.y + 342), UI, self.big)
         issue = hull_purchase_issue(world, hull)
         if issue is not None:
-            self.text(issue, (offer.x + 15, offer.bottom - 82), WARN, self.small)
+            # Owned hulls already say "УЖЕ ВО ФЛОТЕ" in the price field.
+            if not owned:
+                self.text(issue, (offer.x + 15, offer.bottom - 79),
+                          WARN, self.small)
         else:
-            self.text("ГОТОВ К ПОКУПКЕ", (offer.x + 15, offer.bottom - 82),
+            self.text("ГОТОВ К ПОКУПКЕ", (offer.x + 15, offer.bottom - 79),
                       ui.GOOD, self.small)
         self._btn((offer.x + 14, offer.bottom - 55, offer.w - 28, 39),
                   "КУПИТЬ КОРПУС  ·  ENTER" if issue is None else "ПОКУПКА НЕДОСТУПНА",

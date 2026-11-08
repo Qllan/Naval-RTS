@@ -125,3 +125,21 @@ def test_owned_ship_offer_is_not_described_as_a_trade_in_purchase():
     assert "К ДОПЛАТЕ С УЧЁТОМ ОБМЕНА" not in seen
     assert not any(kind == "button" and name == "purchase_hull"
                    for _, kind, name in port.zones)
+
+
+
+def test_shipyard_low_money_price_does_not_overlap_warning():
+    world, port = prepare_shipyard()
+    world.captain.credits = 0
+    seen = []
+    original = port.text
+
+    def record(value, pos, *args, **kwargs):
+        seen.append((str(value), pos[1]))
+        return original(value, pos, *args, **kwargs)
+
+    port.text = record
+    port.draw(world, 0.4)
+    offer_price = next(y for text, y in seen if text == "6,650 КК")
+    warning = next(y for text, y in seen if "НЕ ХВАТАЕТ" in text)
+    assert warning - offer_price >= 40
