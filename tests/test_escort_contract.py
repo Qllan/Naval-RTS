@@ -107,13 +107,13 @@ def test_escort_rejects_corrupted_save_state_and_journal_shows_mission():
     assert "escort" not in save.from_dict(data).contracts
 
 
-def test_contract_board_has_six_missions_and_can_accept_escort():
+def test_contract_board_has_seven_missions_and_can_accept_escort():
     pygame.font.init()
     world = World(seed=9, first_event=1e9)
     port = PortUI(pygame.Surface((1280, 720)))
     port.tab = TABS.index("Контракты")
     port.sel = 3
     port.draw(world, 0.4)
-    assert len([row for row in port.zones if row[1] == "row"]) == 6
+    assert len([row for row in port.zones if row[1] == "row"]) == 7
     port.handle_key(pygame.K_RETURN, world)
     assert world.contracts["escort"]["status"] == "active"
