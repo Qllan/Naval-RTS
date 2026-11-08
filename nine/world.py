@@ -411,7 +411,7 @@ class World:
         mission = self.contracts.get("scout")
         if (mission and mission["status"] == "active" and not mission["explored"]
                 and not self.in_capsule
-                and p.pos.distance_to(self.SCOUT_POS) <= self.SCOUT_RADIUS):
+                and p.pos.distance_to(self.scout_position()) <= self.SCOUT_RADIUS):
             mission["explored"] = True
             self.say("Район разведан! Вернитесь в порт за наградой.", "good")
         if self.waypoint is not None and p.pos.distance_to(self.waypoint) < 120:
@@ -836,14 +836,56 @@ class World:
     }
     SCOUT_POS = (4000.0, 3600.0)
     SCOUT_RADIUS = 320.0
+    SCOUT_ZONES = ((4000.0, 3600.0), (3500.0, 3200.0),
+                   (4500.0, 4200.0), (3100.0, 4800.0))
+
+    def contract_terms(self, key):
+        """Deterministic offer for a cycle; no extra RNG state to save."""
+        name, target, reward = self.CONTRACTS[key]
+        state = self.contracts.get(key) or {}
+        cycle = state.get("cycle", 0)
+        if cycle > 0:
+            rng = random.Random(f"{self.seed}:{key}:{cycle}")
+            if key == "salt":
+                target = rng.choice((8, 10, 12, 15, 18))
+                reward = 80 + target * 17
+            elif key == "pirates":
+                target = rng.randint(1, 3)
+                reward = 170 * target
+            elif key == "scout":
+                reward = rng.choice((280, 320, 375, 420))
+        return name, target, reward
+
+    def scout_position(self):
+        """Each reconnaissance contract cycle explores another sea region."""
+        state = self.contracts.get("scout") or {}
+        cycle = state.get("cycle", 0)
+        if cycle <= 0:
+            return Vector2(self.SCOUT_POS)
+        rng = random.Random(f"{self.seed}:scout-position:{cycle}")
+        return Vector2(self.SCOUT_ZONES[1 + rng.randrange(len(self.SCOUT_ZONES) - 1)])
+
+    def renew_contract(self, key):
+        """Explicitly start a new job after the previous reward was claimed."""
+        state = self.contracts.get(key)
+        if key not in self.CONTRACTS or state is None or state["status"] != "done":
+            return False
+        cycle = state.get("cycle", 0) + 1
+        self.contracts[key] = {
+            "status": "active", "start_kills": self.captain.kills, "cycle": cycle
+        }
+        if key == "scout":
+            self.contracts[key]["explored"] = False
+        self.say(f"Новый контракт: {self.CONTRACTS[key][0]} (заказ №{cycle + 1})")
+        return True
 
     def contract_label(self, key):
-        name, amount, reward = self.CONTRACTS[key]
+        name, amount, reward = self.contract_terms(key)
         state = self.contracts.get(key)
         if state is None:
             return f"Контракт: {name} ({amount}) — принять, награда {reward} КК"
         if state["status"] == "done":
-            return f"Контракт: {name} — выполнен"
+            return f"Контракт: {name} — выполнен. Взять новый заказ"
         if key == "salt":
             progress = min(amount, int(self.captain.cargo.get("salt", 0)))
         elif key == "scout":
@@ -865,7 +907,7 @@ class World:
             return True
         if state["status"] != "active":
             return False
-        _, amount, reward = self.CONTRACTS[key]
+        _, amount, reward = self.contract_terms(key)
         if key == "salt":
             if self.captain.cargo.get("salt", 0) + 1e-6 < amount:
                 return False

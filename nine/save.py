@@ -154,9 +154,14 @@ def from_dict(d):
                     and 0 <= entry["start_kills"] <= cap.kills):
                 if key == "scout" and type(entry.get("explored")) is not bool:
                     continue
+                cycle = entry.get("cycle", 0)
+                if type(cycle) is not int or not 0 <= cycle <= 9999:
+                    continue
                 world.contracts[key] = {
                     "status": entry["status"], "start_kills": entry["start_kills"]
                 }
+                if "cycle" in entry:
+                    world.contracts[key]["cycle"] = cycle
                 if key == "scout":
                     world.contracts[key]["explored"] = entry["explored"]
     # враги и события не сохраняются — после загрузки море спокойное
