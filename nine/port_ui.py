@@ -251,6 +251,12 @@ class PortUI:
             (f"Очистить налёт филаментов ({C.CLEAN_COST} КК)", world.clean_hull),
             (f"Погасить долг ({cap.debt} КК)" if cap.debt else "Долгов нет", world.pay_debt_action),
             (f"Лечение травмы ({C.MEDICAL_COST} КК)" if cap.trauma else "Капитан здоров", world.heal),
+            (f"Купить {C.MARKET_PACK_SIZE} соль-металла "
+             f"({world.market_price('salt', True) * C.MARKET_PACK_SIZE} КК)",
+             lambda: world.buy_resource("salt")),
+            (f"Купить {C.MARKET_PACK_SIZE} филаментов "
+             f"({world.market_price('filament', True) * C.MARKET_PACK_SIZE} КК)",
+             lambda: world.buy_resource("filament")),
         ]
 
     def contract_items(self, world):
@@ -599,7 +605,9 @@ class PortUI:
         pygame.draw.line(self.screen, ui.LINE, (rect.x + 17, rect.y + 60),
                          (rect.right - 17, rect.y + 60), 1)
 
-        ui.text(self.screen, "ПОРТ БЕЖЕНЦЕВ", (rect.x + 22, rect.y + 15), UI, 30, True)
+        hub_name = ("ТОРГОВАЯ ПЛАТФОРМА" if world.active_port == "platform"
+                    else "ПОРТ БЕЖЕНЦЕВ")
+        ui.text(self.screen, hub_name, (rect.x + 22, rect.y + 15), UI, 30, True)
         ui.text(self.screen, "НЕЙТРАЛЬНЫЙ ТЕХНИЧЕСКИЙ УЗЕЛ  /  ГИЛЬДИЯ «ГОРИЗОНТ»",
                 (rect.x + 24, rect.y + 44), DIM, 15)
         cap = world.captain
