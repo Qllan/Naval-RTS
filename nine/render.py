@@ -16,6 +16,7 @@ from .gfx.camera import Camera
 from .gfx.fx import FX
 from .gfx.islands_art import IslandArt
 from .gfx.port_art import PortArt, port_lights
+from .gfx.platform_art import TradePlatformArt, platform_lights
 from .gfx.lighting import Lighting, ambient_color, sun_shadow
 from .gfx.ocean import FogOfWar, Ocean
 from .gfx.ship_art import ShipArt, nav_lights, window_lights
@@ -37,6 +38,7 @@ class Renderer:
         self.wakes = Wakes()
         self.islands = IslandArt()
         self.port = PortArt()
+        self.trade_platform = TradePlatformArt()
         self.motes = VF.VeilMotes()
         self.sky = VF.SkyGlimpse(self.w, self.h)
         self.distortion = True            # искажения в плотной Пелене (настройка)
@@ -59,7 +61,8 @@ class Renderer:
         self.lighting.set_scale(2 if self.high_quality else 4)
         self.lighting.cache.clear()
         self.fx.max_particles = 2200 if self.high_quality else 700
-        self.ocean.wisps_enabled = self.high_quality
+        self.ocean.set_quality(self.high_quality)
+        self.wakes.high_quality = self.high_quality
         self.halos = self.high_quality
         self.motes.max_count = 160 if self.high_quality else 60
         self.haze_enabled = self.high_quality
@@ -114,6 +117,7 @@ class Renderer:
         EF.draw_under(screen, cam, world, self.fx)
         self.ocean.draw_eye_under(screen, cam, world, self.fx)
         self.port.draw(screen, cam, world, self.font)
+        self.trade_platform.draw(screen, cam, world, self.font)
         self.fx.draw(screen, cam, "water")
 
         for n in world.nodes:
@@ -143,6 +147,21 @@ class Renderer:
                 ships.append(s)
             elif blip(s.pos):
                 self._blip(s.pos, t)
+        # Civilian traffic has no target lock, damage model or cargo rewards.
+        for trader in world.trade_traffic.snapshot(world.t):
+            if not cam.visible(trader.pos, 50):
+                continue
+            if seen(trader.pos):
+                self._trader_ship(trader, t)
+            elif blip(trader.pos):
+                self._blip(trader.pos, t)
+        for guard in world.trade_traffic.escort_snapshot(world.t):
+            if not cam.visible(guard.pos, 45):
+                continue
+            if seen(guard.pos):
+                self._escort_ship(guard)
+            elif blip(guard.pos):
+                self._blip(guard.pos, t)
         for ph in world.phantoms:                  # галлюцинации неотличимы от настоящих отметок
             if cam.visible(ph["pos"]):
                 self._blip(ph["pos"], t)
@@ -254,6 +273,9 @@ class Renderer:
         if cam.visible(world.port, 400):
             for lp, col, r in port_lights(world):
                 add(lp, r, col, 1.0)
+        if cam.visible(world.platform, 330):
+            for lp, col, radius in platform_lights(world):
+                add(lp, radius, col, 1.0)
         for n in world.nodes:
             if n.kind != "salt":
                 col = {"condensate": (170, 110, 240), "filament": (200, 170, 255), "zero": (255, 255, 255)}[n.kind]
@@ -302,6 +324,54 @@ class Renderer:
                 pygame.draw.circle(self.screen, col, c, max(1, int(cam.px(0.7))))
 
     # --------------------------------------------------------------------
+
+    def _escort_ship(self, escort):
+        """Noncombat patrol silhouette, distinct from pirates and traders."""
+        cam = self.cam
+        center = cam.w2s(escort.pos)
+        length = max(5, cam.px(22))
+        half = max(3, cam.px(5))
+        forward = Vector2(1, 0).rotate(escort.angle)
+        side = forward.rotate(90)
+        vertices = (center + forward * (length * 0.6),
+                    center + side * half,
+                    center - forward * (length * 0.52) + side * half * 0.7,
+                    center - forward * (length * 0.52) - side * half * 0.7,
+                    center - side * half)
+        pygame.draw.polygon(self.screen, (70, 101, 135), vertices)
+        pygame.draw.polygon(self.screen, (144, 190, 245), vertices, 2)
+        pygame.draw.line(self.screen, (180, 209, 224),
+                         center - forward * (length * 0.2),
+                         center + forward * (length * 0.18), 2)
+        if escort.underway:
+            stern = center - forward * (length * 0.6)
+            pygame.draw.line(self.screen, (90, 147, 179), stern,
+                             stern - forward * (length * 0.35), 1)
+
+    def _trader_ship(self, trader, t):
+        """Civilian freighter silhouette; no player weapon or pirate AI side."""
+        cam = self.cam
+        center = cam.w2s(trader.pos)
+        length = max(7, cam.px(31))
+        width = max(4, cam.px(12))
+        fwd = Vector2(1, 0).rotate(trader.angle)
+        side = fwd.rotate(90)
+        points = (center + fwd * (length * 0.57),
+                  center + fwd * (length * 0.24) + side * (width * 0.5),
+                  center - fwd * (length * 0.48) + side * (width * 0.5),
+                  center - fwd * (length * 0.48) - side * (width * 0.5),
+                  center + fwd * (length * 0.24) - side * (width * 0.5))
+        pygame.draw.polygon(self.screen, (66, 114, 120), points)
+        pygame.draw.polygon(self.screen, (160, 214, 205), points, 2)
+        for offset in (-length * 0.2, 0, length * 0.18):
+            c = center + fwd * offset
+            pygame.draw.line(self.screen, (171, 141, 83),
+                             c - side * width * 0.35, c + side * width * 0.35,
+                             max(1, round(cam.px(2))))
+        if trader.underway:
+            wake = center - fwd * length * 0.8
+            pygame.draw.line(self.screen, (83, 149, 163), wake,
+                             wake - fwd * length * 0.5, max(1, round(cam.px(1.2))))
 
     def _blip(self, pos, t):
         s = self.cam.w2s(pos)

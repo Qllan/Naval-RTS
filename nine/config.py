@@ -10,6 +10,15 @@ WORLD_W, WORLD_H = 8000, 8000
 PORT_POS = (1200.0, 6800.0)
 PORT_RADIUS = 170.0
 DOCK_MAX_SPEED = 60.0
+# Второй хаб: пока неподвижная торговая платформа.
+PLATFORM_CANDIDATES = ((2900.0, 6200.0), (2600.0, 5700.0),
+                       (3500.0, 6100.0), (2300.0, 5200.0))
+MARKET_MULTIPLIERS = {
+    "port": {"salt": 1.0, "condensate": 1.0, "filament": 1.0, "zero": 1.0},
+    "platform": {"salt": 1.8, "condensate": 0.8, "filament": 0.6, "zero": 0.95},
+}
+MARKET_BUY_MARKUP = 1.3
+MARKET_PACK_SIZE = 10
 
 # Око Девятки — центр Пелены
 EYE_POS = (6400.0, 1600.0)

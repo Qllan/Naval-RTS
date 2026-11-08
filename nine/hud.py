@@ -13,6 +13,7 @@ from pygame.math import Vector2
 from . import config as C
 from .entities import RESOURCES
 from .gfx import ui
+from .gfx.style_tokens import rgb
 from .gfx.ship_art import MAST, outline
 from .modules import AMMO, SIZE_NAME
 from .ship import PIP_MAX, PIP_SYSTEMS, SUBSYSTEMS
@@ -55,12 +56,45 @@ def health_color(v):
     return ui.TEXT if v > 0.95 else ui.WARN if v > 0.5 else ui.BAD
 
 
+def combat_focus(world):
+    """What can interrupt the player's next action?
+
+    The HUD shows threats first. This is a display-only classification:
+    it never modifies AI, sensor ranges, weapon behaviour or world events.
+    """
+    p = world.player
+    if (p.hp <= p.hull.hp * 0.3 or p.fires > 0 or
+            p.water > 0.55 or p.leaks > 0 or p.brownout or
+            any(pr.kind == "missile" and pr.target is p and not pr.lost
+                for pr in world.projectiles)):
+        return "critical"
+    radar = world.radar_range()
+    if any(p.pos.distance_to(pr.ship.pos) <= min(550, radar)
+           for pr in world.pirates):
+        return "combat"
+    if any(w.overheated for w in p.weapons):
+        return "combat"
+    if world.density_at(p.pos) >= C.ZONE_DENSE:
+        return "hazard"
+    return "cruise"
+
+
 class Hud:
     MINIMAP = 180
+    LOGICAL_SIZE = (1280, 720)
 
     def __init__(self, screen, world):
-        self.screen = screen
-        self.w, self.h = screen.get_size()
+        self.display = screen
+        physical = screen.get_size()
+        # Only scale up large windows; compact screens retain their native
+        # draw/input path so text is never shrunk a second time.
+        self.virtual = min(physical[0] / 1280, physical[1] / 720) > 1.05
+        self.viewport = ui.interface_viewport(physical, self.LOGICAL_SIZE)
+        self.screen = (pygame.Surface(self.LOGICAL_SIZE, pygame.SRCALPHA)
+                       if self.virtual else screen)
+        self._overlay = (pygame.Surface(self.viewport.size, pygame.SRCALPHA)
+                         if self.virtual else None)
+        self.w, self.h = self.screen.get_size()
         self.minimap_bg = self._build_minimap(world)
         self.show_help = False
         self.help_until = 12.0
@@ -78,6 +112,31 @@ class Hud:
         self.keys = None           # Settings — чтобы подсказки показывали назначенные клавиши
         self._fog = None
         self._fog_t = -1.0
+        self.focus = "cruise"
+        self.visible_alerts = []  # labels actually shown this frame
+
+    def to_display(self, pos):
+        """Logical HUD point -> physical screen position."""
+        if not self.virtual:
+            return (round(pos[0]), round(pos[1]))
+        return (round(self.viewport.x + pos[0] * self.viewport.w / self.w),
+                round(self.viewport.y + pos[1] * self.viewport.h / self.h))
+
+    def to_logical(self, pos):
+        """Physical point -> logical HUD point (also valid off-screen)."""
+        if not self.virtual:
+            return (float(pos[0]), float(pos[1]))
+        return ((pos[0] - self.viewport.x) * self.w / self.viewport.w,
+                (pos[1] - self.viewport.y) * self.h / self.viewport.h)
+
+    def _physical_rect(self, rect):
+        if not self.virtual:
+            return pygame.Rect(rect)
+        start = self.to_display(rect.topleft)
+        end = self.to_display(rect.bottomright)
+        return pygame.Rect(start, (max(1, end[0] - start[0]),
+                                   max(1, end[1] - start[1])))
+
 
     # --------------------------------------------------------------------
 
@@ -87,10 +146,13 @@ class Hud:
         for y in range(n):
             for x in range(n):
                 d = world.veil.static_density(x / n * C.WORLD_W, y / n * C.WORLD_H)
-                surf.set_at((x, y), (int(6 + 70 * d), int(12 + 14 * d), int(20 + 90 * d)))
+                # Dark steel and cold teal, matching the world Veil instead
+                # of the obsolete purple minimap. Contrast stays conservative.
+                sea, mist = rgb("water_deep"), rgb("veil_mist")
+                surf.set_at((x, y), P_mix(sea, mist, min(0.46, d * 0.46)))
         for i in range(0, n, n // 8):
-            pygame.draw.line(surf, (22, 34, 44), (i, 0), (i, n))
-            pygame.draw.line(surf, (22, 34, 44), (0, i), (n, i))
+            pygame.draw.line(surf, ui.FAINT, (i, 0), (i, n))
+            pygame.draw.line(surf, ui.FAINT, (0, i), (n, i))
         for isl in world.islands:
             pts = []
             for k in range(24):
@@ -113,12 +175,23 @@ class Hud:
     def draw(self, world, docked, cam=None, events=(), mouse=None):
         if docked:
             return
+        if self.virtual:
+            self.screen.fill((0, 0, 0, 0))
         dt = 1 / 60
         self.buttons, self.panels = [], []
-        self.mouse = mouse if mouse is not None else pygame.mouse.get_pos()
+        position = mouse if mouse is not None else pygame.mouse.get_pos()
+        self.mouse = self.to_logical(position)
+        self.focus = combat_focus(world)
+        self.visible_alerts = []
         self._track_numbers(world, dt)
         self._track_hits(world, events, dt)
         if cam is not None:
+            if self.virtual:
+                outer_cam = cam
+                class VirtualCamera:
+                    def w2s(_, point):
+                        return Vector2(self.to_logical(outer_cam.w2s(point)))
+                cam = VirtualCamera()
             self._edge_markers(world, cam)
         self._damage_direction(world)
         self._status(world, dt)
@@ -128,14 +201,27 @@ class Hud:
             self._minimap(world)
         self._weapons(world)
         if self.hints:
-            self._goal(world)
+            # Tutorials and routine orders yield the screen to actual threats.
+            if self.focus not in ("combat", "critical"):
+                self._goal(world)
             self._hints(world)
         self._toasts(world)
-        if self.show_log:
+        if self.show_log and self.focus == "cruise":
             self._log(world)
         if self.show_help or world.t < self.help_until:
             self._help()
         self._flashes(dt)
+        if self.virtual:
+            # Reuse the same transparent destination; render game world at
+            # its native size. Convert click regions BEFORE Game uses them.
+            pygame.transform.smoothscale(self.screen, self.viewport.size,
+                                         self._overlay)
+            self.display.blit(self._overlay, self.viewport.topleft)
+            self.buttons = [(self._physical_rect(rect), action)
+                            for rect, action in self.buttons]
+            self.panels = [self._physical_rect(rect) for rect in self.panels]
+            if self.minimap_rect is not None:
+                self.minimap_rect = self._physical_rect(self.minimap_rect)
 
     # --- обратная связь -----------------------------------------------------------
 
@@ -161,7 +247,7 @@ class Hud:
         for key, val in cur.items():
             old = self._last.get(key)
             if old is not None and val != old:
-                pos = (120, 222) if key == "credits" else (230, 222)
+                pos = (120, 184) if key == "credits" else (230, 184)
                 self._popups.append([f"{val - old:+d}", pos, 1.2, ui.GOOD if val > old else ui.BAD])
                 self._flash_until[key] = 0.6
             self._last[key] = val
@@ -210,7 +296,8 @@ class Hud:
     def _edge_markers(self, world, cam):
         """Стрелки у края экрана: порт, путевая точка, контакты радара, сигнатуры событий."""
         p = world.player
-        marks = [(world.port, ui.ACCENT, "Порт")]
+        marks = [(world.port, ui.ACCENT, "Порт"),
+                 (world.platform, ui.C_ENERGY, "Торговля")]
         if getattr(world, "waypoint", None) is not None:
             marks.append((world.waypoint, ui.C_ENERGY, "Точка"))
         radar = world.radar_range()
@@ -245,12 +332,14 @@ class Hud:
     def _toasts(self, world):
         """Уведомления по центру сверху: последние важные сообщения, плавно гаснут."""
         colors = {"bad": ui.BAD, "good": ui.GOOD, "event": (190, 150, 255), "info": ui.TEXT}
-        recent = [m for m in world.log if world.t - m[1] < 4.5 and m[2] != "info"][-3:]
-        y = 74
+        recent = [m for m in world.log if world.t - m[1] < 4.5 and m[2] != "info"][-2:]
+        y = 62
         for text, when, level in recent:
             age = world.t - when
             k = min(1.0, age * 6, (4.5 - age) / 0.8)
             col = colors[level]
+            while ui.text_width(text, 20, True) > min(450, self.w - 100) and len(text) > 5:
+                text = text[:-2] + "…"
             w = ui.text_width(text, 20, True) + 36
             r = pygame.Rect(0, 0, w, 28)
             r.midtop = (self.w // 2, y - int((1 - min(1.0, age * 6)) * 12))
@@ -268,9 +357,11 @@ class Hud:
 
     def _status(self, world, dt):
         s, p, cap = self.screen, world.player, world.captain
-        box = ui.panel(self.screen, (12, 12, 330, 188), p.hull.name, ui.WARN if world.in_capsule else ui.ACCENT)
+        box = ui.panel(self.screen, (12, 12, 330, 168), p.hull.name,
+                       ui.BAD if self.focus == "critical" else ui.WARN if world.in_capsule
+                       else ui.ACCENT)
         self.panels.append(box.union(pygame.Rect(12, box.bottom, 330, 34)))
-        self._silhouette(world, pygame.Rect(box.x + 12, box.y + 28, 62, 120))
+        self._silhouette(world, pygame.Rect(box.x + 12, box.y + 28, 62, 107))
 
         x, y, w = box.x + 88, box.y + 32, 150
         rows = [("hull", "Корпус", p.hp, p.hull.hp, ui.C_HULL)]
@@ -280,15 +371,18 @@ class Hud:
             rows.append(("shield", "Щит", p.shield, p.shield_max, ui.C_SHIELD))
         for key, label, v, vmax, col in rows:
             frac = v / vmax if vmax else 0
-            ui.icon(s, key, (x + 6, y + 5), 12, col)
-            ui.bar(s, (x + 18, y + 1, w, 8), frac, col, segments=10, ghost=self._ghosted(key, frac, dt))
+            # Actual words are as important as tint in a glanceable HUD.
+            short = {"hull": "КОРПУС", "armor": "БРОНЯ", "shield": "ЩИТ"}[key]
+            ui.text(s, short, (x + 2, y - 3), ui.DIM, 13, True)
+            ui.bar(s, (x + 70, y + 1, 96, 8), frac, col,
+                   segments=10, ghost=self._ghosted(key, frac, dt))
             ui.text(s, f"{int(max(0, v))}", (box.right - 12, y - 2), ui.TEXT, 16, anchor="topright")
             y += 18
         if p.cap_max:
             bal = p.power_balance(world.density_at(p.pos))
             col = ui.BAD if p.brownout else ui.C_ENERGY
-            ui.icon(s, "reactor", (x + 6, y + 5), 12, col)
-            ui.bar(s, (x + 18, y + 2, w, 6), p.capacitor / p.cap_max, col)
+            ui.text(s, "ЭНЕРГИЯ", (x + 2, y - 3), ui.DIM, 13, True)
+            ui.bar(s, (x + 70, y + 2, 96, 6), p.capacitor / p.cap_max, col)
             ui.text(s, f"{bal:+.1f}/с", (box.right - 12, y - 2), ui.BAD if bal < 0 else ui.DIM, 16,
                     anchor="topright")
             y += 18
@@ -306,10 +400,13 @@ class Hud:
                         math.radians(210 - 240 * frac), math.radians(210), 3)
         ui.text(s, int(p.speed), sc + Vector2(0, -2), ui.TEXT, 20, True, anchor="center")
         ui.text(s, "скор.", sc + Vector2(0, 12), ui.DIM, 13, anchor="center")
-        ui.text(s, f"макс {int(p.max_speed())}", (x + 64, box.bottom - 56), ui.DIM, 15)
-        ui.text(s, f"масса {int(p.mass)}", (x + 64, box.bottom - 40), ui.DIM, 15)
-        if p.list_angle > 0.5:
-            ui.text(s, f"крен {p.list_angle:.0f}°", (x + 64, box.bottom - 24), ui.WARN, 15)
+        ui.text(s, f"макс {int(p.max_speed())}", (x + 64, box.bottom - 45), ui.DIM, 15)
+        # Mass is a fitting decision, not a permanent combat readout.
+        if p.list_angle > 1:
+            ui.text(s, f"КРЕН {p.list_angle:.0f}°", (x + 64, box.bottom - 25),
+                    ui.WARN, 15)
+        elif p.boosting:
+            ui.text(s, "ФОРСАЖ", (x + 64, box.bottom - 25), ui.WARN, 15)
 
         # кредиты и трюм
         y = box.bottom + 6
@@ -322,36 +419,36 @@ class Hud:
         ui.text(s, f"{int(world.cargo_used)}/{world.cargo_capacity}", (164, y + 7), ui.WARN if full else ui.TEXT, 18)
         ui.text(s, f"~{world.cargo_value()} КК", (330, y + 7), ui.DIM, 16, anchor="topright")
 
+        # Two short, ranked alerts instead of an unbounded wall of chips.
+        # The classifier shares the same facts as gameplay; display-only.
         y += 34
         chips = []
         if p.fires:
-            chips.append((f"ПОЖАР ×{p.fires}", ui.BAD))
+            chips.append((0, f"ПОЖАР ×{p.fires}", ui.BAD))
         if p.leaks or p.water > 0.02:
-            chips.append((f"ТЕЧЬ ×{p.leaks} · вода {int(p.water * 100)}%", ui.BAD if p.water > 0.6 else ui.WARN))
-        if cap.debt:
-            chips.append((f"ДОЛГ {cap.debt} КК", ui.BAD))
-        if cap.trauma:
-            chips.append(("ТРАВМА", ui.WARN))
-        # предупреждения заранее
-        if p.cap_max and p.power_balance(0.8) < 0 and world.density_at(p.pos) < 0.6:
-            chips.append(("В ПЕЛЕНЕ НЕ ХВАТИТ ЭНЕРГИИ", ui.WARN))
-        if p.mass_factor() < 0.8:
-            chips.append((f"ПЕРЕГРУЗ −{int((1 - p.mass_factor()) * 100)}% скор.", ui.WARN))
+            chips.append((0, f"ТЕЧЬ · ВОДА {int(p.water * 100)}%", ui.BAD if p.water > 0.6 else ui.WARN))
         if p.hp < p.hull.hp * 0.3 and not world.in_capsule:
-            chips.append(("КОРПУС < 30%", ui.BAD))
+            chips.append((0, "КОРПУС ПОВРЕЖДЁН", ui.BAD))
+        if p.brownout:
+            chips.append((0, "НЕТ ЭНЕРГИИ", ui.BAD))
         if any(w.defn.ammo and w.ammo == 0 for w in p.weapons):
-            chips.append(("НЕТ БОЕЗАПАСА", ui.WARN))
+            chips.append((1, "НЕТ БОЕЗАПАСА", ui.WARN))
+        if p.cap_max and p.power_balance(0.8) < 0 and world.density_at(p.pos) < 0.6:
+            chips.append((1, "В ПЕЛЕНЕ НЕ ХВАТИТ ЭНЕРГИИ", ui.WARN))
+        if p.mass_factor() < 0.8:
+            chips.append((2, f"ПЕРЕГРУЗ −{int((1 - p.mass_factor()) * 100)}%", ui.WARN))
+        if cap.debt:
+            chips.append((2, f"ДОЛГ {cap.debt} КК", ui.BAD))
+        if cap.trauma:
+            chips.append((2, "ТРАВМА", ui.WARN))
         if world.spotlight and world.daylight() < 0.5:
-            chips.append(("ПРОЖЕКТОР ВЫДАЁТ", ui.WARN))
-        x = 12
-        row_y = y
-        for label, col in chips:
-            w = ui.text_width(label, 15, True) + 10
-            if x + w > 340:
-                x = 12
-                row_y += 18
-            r = ui.chip(s, label, (x, row_y), col, 15)
-            x = r.right + 6
+            chips.append((2, "ПРОЖЕКТОР ВЫДАЁТ", ui.WARN))
+        chips.sort(key=lambda item: item[0])
+        for priority, label, col in chips[:2]:
+            while ui.text_width(label, 15, True) > 304 and len(label) > 4:
+                label = label[:-2] + "…"
+            ui.chip(s, label, (12, y), col, 15)
+            y += 18
 
     def _silhouette(self, world, rect):
         """Силуэт корабля носом вверх: заливка по корпусу, вода снизу, подсистемы и оружие точками."""
@@ -394,31 +491,37 @@ class Hud:
     # --- зона ----------------------------------------------------------------------
 
     def _zone(self, world):
+        """Small navigation context; detail only when Veil is consequential."""
         s, p = self.screen, world.player
         d = world.density_at(p.pos)
         zone = world.veil.zone(p.pos, d)
-        zc = ui.ACCENT if d < C.ZONE_MIST else ui.WARN if d < C.ZONE_DENSE else ui.BAD
+        dense = d >= C.ZONE_DENSE
+        mist = d >= C.ZONE_MIST
+        zc = ui.BAD if dense else ui.WARN if mist else ui.ACCENT
         cx = self.w // 2
-        ui.text(s, zone.upper(), (cx, 12), zc, 26, True, anchor="midtop")
-        bw = 240
-        r = pygame.Rect(cx - bw // 2, 40, bw, 5)
+        bw = 194
+        band_w = min(326, max(230, self.w - 696))
+        band = ui.panel(s, (cx - band_w // 2, 6, band_w, 49),
+                        None, accent=zc)
+        self.panels.append(band)
+        ui.text(s, zone.upper(), (band.x + 13, 12), zc, 20, True)
+        ui.text(s, f"{int(d * 100)}%", (band.right - 13, 13), ui.TEXT, 17,
+                True, anchor="topright")
+        bw = min(bw, band.w - 50)
+        r = pygame.Rect(cx - bw // 2, 39, bw, 4)
         ui.bar(s, r, d, zc)
         for th in (C.ZONE_MIST, C.ZONE_DENSE):
-            x = r.x + bw * th
-            pygame.draw.line(s, ui.DIM, (x, r.y - 3), (x, r.bottom + 2), 1)
+            line_x = round(r.x + bw * th)
+            pygame.draw.line(s, ui.DIM, (line_x, r.y - 2),
+                             (line_x, r.bottom + 2))
+        # Radar failure is a hazard, not permanent text in safe waters.
         radar = world.radar_range()
-        radar_s = "РАДАР ОТКЛ." if radar <= 0 else f"радар {int(radar)}"
-        ui.text(s, f"Пелена {int(d * 100)}%  ·  {radar_s}  ·  обзор {int(world.visual_range())}", (cx, 50),
-                ui.BAD if radar <= 0 else ui.DIM, 15, anchor="midtop")
-        # часы: солнце днём, луна ночью; прожектор
-        day = world.daylight()
-        ix = cx + bw // 2 + 26
-        ui.icon(s, "sun" if day > 0.5 else "moon", (ix, 42), 16, ui.C_ENERGY if day > 0.5 else (170, 190, 230))
-        ui.text(s, world.clock(), (ix + 14, 34), ui.TEXT, 18, True)
-        if world.spotlight:
-            ui.chip(s, "L прожектор", (ix + 64, 35), ui.WARN, 14)
-        elif day < 0.5:
-            ui.chip(s, "L", (ix + 64, 35), ui.DIM, 14)
+        if radar <= 0:
+            ui.chip(s, "РАДАР ОТКЛ.", (cx + 171, 8), ui.BAD, 14)
+        elif dense:
+            ui.text(s, f"РАДАР {int(radar)}", (cx + 171, 14), ui.WARN, 14)
+        # Time remains in a small separate navigator label.
+        ui.text(s, world.clock(), (cx + 170, 35), ui.DIM, 15)
 
     # --- карта -------------------------------------------------------------------
 
@@ -437,7 +540,7 @@ class Hud:
         s.blit(self._fog, (x0, y0))
         if world.veil.in_dead_zone(world.player.pos):
             veil = pygame.Surface((n, n), pygame.SRCALPHA)
-            veil.fill((10, 4, 16, 200))
+            veil.fill((*rgb("ui_bg"), 218))
             s.blit(veil, (x0, y0))
             ui.text(s, "НЕТ СВЯЗИ", (x0 + n // 2, y0 + n // 2), ui.BAD, 24, True, anchor="center")
             return
@@ -452,6 +555,12 @@ class Hud:
         for pi in world.pirates:
             if world.on_radar(pi.ship.pos) or world.perceives(pi.ship.pos):
                 pygame.draw.circle(s, ui.BAD, m(pi.ship.pos), 2)
+        for trader in world.trade_traffic.snapshot(world.t):
+            if world.on_radar(trader.pos) or world.perceives(trader.pos):
+                pygame.draw.circle(s, ui.C_ENERGY, m(trader.pos), 2)
+        for escort in world.trade_traffic.escort_snapshot(world.t):
+            if world.on_radar(escort.pos) or world.perceives(escort.pos):
+                pygame.draw.circle(s, (145, 180, 255), m(escort.pos), 2)
         for ph in world.phantoms:
             pygame.draw.circle(s, ui.BAD, m(ph["pos"]), 2)
         for ev in world.events.active:
@@ -463,10 +572,14 @@ class Hud:
             pygame.draw.polygon(s, (240, 220, 120), [wp + Vector2(0, -4), wp + Vector2(4, 0), wp + Vector2(0, 4),
                                                      wp + Vector2(-4, 0)])
         pygame.draw.circle(s, ui.ACCENT, m(world.port), 4, 1)
+        pygame.draw.rect(s, ui.C_ENERGY, pygame.Rect(m(world.platform)[0] - 3,
+                                                       m(world.platform)[1] - 3, 7, 7), 1)
         pygame.draw.circle(s, (240, 240, 250), m(world.eye), 3)
-        pygame.draw.circle(s, (140, 90, 190), m(world.eye), int(C.EYE_WALL_R / C.WORLD_W * n), 1)
+        pygame.draw.circle(s, rgb("veil_fringe"), m(world.eye),
+                           int(C.EYE_WALL_R / C.WORLD_W * n), 1)
         ui.text(s, "Око", (m(world.eye)[0] - 8, m(world.eye)[1] + 6), ui.DIM, 14, anchor="topright")
         ui.text(s, "Порт", (m(world.port)[0] + 7, m(world.port)[1] - 6), ui.DIM, 14)
+        ui.text(s, "Торг.", (m(world.platform)[0] + 6, m(world.platform)[1] - 6), ui.DIM, 14)
         p = world.player
         pp = Vector2(m(p.pos))
         pygame.draw.circle(s, (40, 110, 100), pp, max(2, int(world.radar_range() / C.WORLD_W * n)), 1)
@@ -501,10 +614,16 @@ class Hud:
         actives = [u for u in p.utilities if u.defn.active]
         has_guns = any(m.defn.kind == "gun" and m.defn.dmg_type == "kinetic" for m in p.weapons)
         rows = len(p.weapons) + len(actives)
-        h = 30 + 30 + (22 if has_guns else 0) + rows * 22 + 8
-        box = ui.panel(self.screen, (self.w - 344, self.h - 12 - h, 332, h), "Вооружение")
+        h = 37 + 30 + (22 if has_guns else 0) + rows * 24 + 8
+        ready_count = sum(w.reload <= 0 and w.has_ammo and not w.overheated
+                          for w in p.weapons)
+        box = ui.panel(self.screen, (self.w - 344, self.h - 12 - h, 332, h), "АРСЕНАЛ")
+        col = ui.GOOD if ready_count == len(p.weapons) else ui.WARN
+        ui.text(s, f"{ready_count}/{len(p.weapons)} ГОТОВО",
+                (box.right - 13, box.y + 8), col, 15, True,
+                anchor="topright")
         self.panels.append(box)
-        y = box.y + 28
+        y = box.y + 33
 
         # энергия по системам
         x = box.x + 12
@@ -532,7 +651,7 @@ class Hud:
             ui.text(s, f"{AMMO[ammo].name}{stock}", (box.x + 36, y), col, 17)
             others = "   ".join(f"{AMMO[k].short} {v}" for k, v in world.captain.ammo_stock.items())
             ui.text(s, others, (box.right - 12, y + 1), ui.DIM, 15, anchor="topright")
-            y += 22
+            y += 24
 
         for m in p.weapons:
             d = m.defn
@@ -552,12 +671,15 @@ class Hud:
                 ui.bar(s, (bx, y + 4, 70, 5), frac, ui.ACCENT if ready else ui.DIM)
                 if m.heat > 1:
                     ui.bar(s, (bx, y + 11, 70, 2), m.heat / 100, ui.WARN if m.heat > 60 else (120, 110, 80))
-                info = f"{m.ammo}/{d.ammo}" if d.ammo else ""
-                if d.kind == "missile" and m.lock > 0:
-                    info = f"{int(m.lock * 100)}%"
-                ui.text(s, info, (box.right - 12, y + 1), ui.BAD if d.ammo and m.ammo == 0 else ui.DIM, 15,
+                info = f"{m.ammo}/{d.ammo}" if d.ammo else ("ГОТОВО" if ready else "ЗАРЯД")
+                if d.ammo and m.ammo == 0:
+                    info = "НЕТ БК"
+                elif d.kind == "missile" and m.lock > 0:
+                    info = f"ЗАХВАТ {int(m.lock * 100)}%"
+                info_col = ui.BAD if d.ammo and m.ammo == 0 else ui.GOOD if ready else ui.DIM
+                ui.text(s, info, (box.right - 12, y + 1), info_col, 15,
                         anchor="topright")
-            y += 22
+            y += 24
         for n, u in enumerate(actives, 1):
             if self._button((box.x + 8, y, box.w - 16, 21), ("utility", n - 1)):
                 pygame.draw.rect(s, ui.LINE, (box.x + 8, y, box.w - 16, 21), 1)
@@ -576,7 +698,7 @@ class Hud:
             if u.cooldown > 0 and u.active_time <= 0:
                 ui.bar(s, (box.x + 190, y + 6, 70, 3), 1 - u.cooldown / u.defn.cooldown, ui.DIM)
             ui.text(s, state, (box.right - 12, y + 1), col, 15, anchor="topright")
-            y += 22
+            y += 24
 
     # --- подсказки и журнал ---------------------------------------------------------
 
@@ -585,6 +707,14 @@ class Hud:
         hints = []
         if world.in_capsule:
             hints.append(("Вы в капсуле. Идите к порту (юго-запад) и нажмите F.", ui.WARN))
+        if p.hp < p.hull.hp * 0.3 and not world.in_capsule:
+            hints.append(("КОРПУС КРИТИЧЕСКИ ПОВРЕЖДЁН", ui.BAD))
+        if p.fires:
+            hints.append((f"ПОЖАР НА КОРАБЛЕ ×{p.fires}", ui.BAD))
+        if p.water > 0.55:
+            hints.append(("ОПАСНОЕ ЗАТОПЛЕНИЕ", ui.BAD))
+        if any(w.overheated for w in p.weapons):
+            hints.append(("ОРУДИЕ ПЕРЕГРЕТО", ui.WARN))
         if world.can_dock():
             hints.append(("[F] Пришвартоваться", ui.ACCENT))
         if world.sheltering_tihodont():
@@ -613,33 +743,70 @@ class Hud:
             full = world.cargo_used >= world.cargo_capacity
             hints.append(("Трюм полон" if full else f"[E] Добыча: {RESOURCES[node.kind].name}",
                           ui.WARN if full else ui.ACCENT))
-        y = self.h - 26 - 24 * (len(hints) - 1)
-        for label, col in hints:
-            w = ui.text_width(label, 18) + 24
-            r = pygame.Rect(0, 0, w, 20)
-            r.midtop = (self.w // 2 - 20, y - 2)
-            bg = pygame.Surface(r.size, pygame.SRCALPHA)
-            bg.fill((5, 9, 14, 170))
-            s.blit(bg, r)
-            pygame.draw.line(s, col, r.topleft, r.bottomleft, 2)
-            ui.text(s, label, r.center, col, 18, anchor="center")
-            y += 24
+        # Only two highest-priority actionable signals may occupy the sea.
+        # Keep stable order among equal priorities (missiles and brownout
+        # beat routine mining and repair notes).
+        def priority(item):
+            label, color = item
+            if label.startswith("Ракета на подлёте"):
+                return -3
+            if label.startswith("Энергия на нуле"):
+                return -2
+            if label.startswith(("КОРПУС КРИТИЧЕСКИ", "ОПАСНОЕ ЗАТОПЛЕНИЕ",
+                                 "ПОЖАР НА КОРАБЛЕ")):
+                return -1
+            return 0 if color == ui.BAD else 1 if color == ui.WARN else 2
+
+        hints.sort(key=priority)
+        chosen = hints[:2]
+        self.visible_alerts = [text for text, _ in chosen]
+        y = self.h - 78 - 25 * (len(chosen) - 1)
+        for label, col in chosen:
+            # Keep the centre-bottom lane clear of the right arsenal and
+            # the left status/log at 960px and other medium resolutions.
+            left_edge, right_edge = 345, self.w - 356
+            max_label_width = min(470, max(160, right_edge - left_edge - 36))
+            while ui.text_width(label, 18) > max_label_width and len(label) > 5:
+                label = label[:-2] + "…"
+            width = ui.text_width(label, 18) + 24
+            rect = pygame.Rect(0, 0, width, max(23, ui.Fonts.get(18, True).get_height() + 5))
+            rect.midtop = ((left_edge + right_edge) // 2, y)
+            bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+            bg.fill((*ui.PANEL_RGB, 224))
+            s.blit(bg, rect)
+            pygame.draw.line(s, col, rect.topleft, rect.bottomleft, 3)
+            ui.text(s, label, rect.center, col, 18, True, anchor="center")
+            y += 25
 
     def _log(self, world):
-        """Журнал слева снизу. В плотной Пелене записи «размываются» — амнезия из лора."""
-        y = self.h - 26
+        """At sea, keep only the newest two routine entries.
+
+        During threats the journal yields entirely to the action layer.
+        Full history remains available elsewhere; data is not erased.
+        """
+        y = self.h - 29
         blur = max(0.0, (world.density_at(world.player.pos) - 0.6) / 0.4)
-        colors = {"bad": ui.BAD, "good": ui.GOOD, "event": (190, 150, 255), "info": ui.TEXT}
+        colors = {"bad": ui.BAD, "good": ui.GOOD,
+                  "event": rgb("veil_fringe"), "info": ui.TEXT}
+        shown = 0
         for msg, when, level in reversed(world.log):
             age = world.t - when
             if age > 10:
                 continue
-            k = max(0.25, 1.0 - age / 10)
             if blur > 0:
-                msg = _smear(msg, blur * min(1.0, age / 4), int(when * 100))
-            ui.text(self.screen, "›", (14, y), tuple(int(c * k) for c in ui.ACCENT), 16, True)
-            ui.text(self.screen, msg, (26, y), tuple(int(c * k) for c in colors[level]), 16)
-            y -= 18
+                msg = _smear(msg, blur * min(1.0, age / 4),
+                             int(when * 100))
+            while ui.text_width(msg, 16) > min(395, self.w * 0.34) and len(msg) > 5:
+                msg = msg[:-2] + "…"
+            k = max(0.35, 1.0 - age / 10)
+            ui.text(self.screen, "›", (14, y),
+                    tuple(int(c * k) for c in ui.ACCENT), 16, True)
+            ui.text(self.screen, msg, (26, y),
+                    tuple(int(c * k) for c in colors[level]), 16)
+            y -= 19
+            shown += 1
+            if shown >= 2:
+                break
 
     def _help(self):
         w = 780

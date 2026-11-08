@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from .style_tokens import rgb
+
 
 def mix(a, b, t):
     return tuple(int(x + (y - x) * t) for x, y in zip(a, b))
@@ -40,17 +42,19 @@ SHIP_PALETTES = {
                            accent=(255, 230, 180), turret=(0, 0, 0), armor=(0, 0, 0)),
 }
 
-# Океан
-OCEAN_DEEP = (8, 18, 30)
-OCEAN_MID = (14, 29, 46)
-OCEAN_LIGHT = (26, 48, 70)
-FOAM = (170, 195, 210)
-GLINT = (110, 150, 175)
+# Океан — одобрена палитра Style Bible 1.0 (R1.3).
+OCEAN_DEEP = rgb("water_deep")
+OCEAN_MID = rgb("water_mid")
+OCEAN_LIGHT = rgb("water_ridge")
+FOAM = rgb("water_foam")
+GLINT = mix(OCEAN_LIGHT, FOAM, 0.45)
 
-# Пелена
-VEIL_TINT = (84, 44, 128)
-VEIL_WISP = (150, 96, 210)
-SURGE = (190, 90, 255)
+# Пелена: основной тон холодно-бирюзовый; фиолетовый — редкий акцент.
+VEIL_TINT = rgb("veil_depth")
+VEIL_WISP = rgb("veil_mist")
+VEIL_GLOW = rgb("veil_glow")
+VEIL_FRINGE = rgb("veil_fringe")
+SURGE = VEIL_GLOW
 
 # Эффекты
 MUZZLE = (255, 226, 160)

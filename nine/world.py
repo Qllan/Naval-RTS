@@ -17,7 +17,13 @@ from .hulls import HULLS
 from .islands import AGROUND_MIN_SPEED, avoid_turn, collide_ship, generate_islands, island_at
 from .modules import AMMO, AMMO_ORDER, MODULES
 from .ship import SUBSYSTEM_NAME, SUBSYSTEMS, Ship, fit_problems
+from .spatial import ShipCollisionGrid, ship_overlaps
 from .veil import Veil
+from .trade_traffic import TradeTraffic
+from .market import MAX_STOCK, apply_deliveries, new_stocks, unit_price
+from .market_events import current_event, demand_multiplier, latest_news
+from .reputation import (PARTNER_AT, MASTER_AT, add_reputation, discount,
+                         new_reputation, rank, next_rank)
 
 MODULE_RESALE = 0.5
 HULL_RESALE = 0.5
@@ -65,6 +71,7 @@ class Captain:
     ammo_stock: dict = field(default_factory=lambda: {"ap": 0, "he": 0})
     pending_insurance: int = 0
     kills: int = 0
+    guild_certificates: int = 0
 
 
 class World:
@@ -101,6 +108,15 @@ class World:
         self.pirate_spawn_cd = 10.0
 
         self.islands = generate_islands(random.Random(seed + 77), self.port, self.eye)
+        self.platform = next(
+            (Vector2(pos) for pos in C.PLATFORM_CANDIDATES
+             if not island_at(self.islands, pos, C.PORT_RADIUS + 100)),
+            Vector2(C.PLATFORM_CANDIDATES[0]))
+        self.active_port = "port"
+        self.trade_traffic = TradeTraffic(self.port, self.platform, self.islands)
+        self.market_stock = new_stocks()
+        self.market_last_time = self.t
+        self.guild_reputation = new_reputation()
         self._aground_cd = 0.0
         for _ in range(280):
             self._spawn_node()
@@ -111,10 +127,14 @@ class World:
 
         # Навигация и память: разведанная карта, отметки, путевая точка, кодекс
         self.memory = np.zeros((C.WORLD_H // MEMORY_CELL, C.WORLD_W // MEMORY_CELL), np.float32)
-        self.marks = {"port": {"pos": Vector2(self.port), "label": "Порт беженцев", "kind": "port", "clarity": 1.0}}
+        self.marks = {
+            "port": {"pos": Vector2(self.port), "label": "Порт беженцев", "kind": "port", "clarity": 1.0},
+            "platform": {"pos": Vector2(self.platform), "label": "Торговая платформа", "kind": "port", "clarity": 1.0},
+        }
         self.waypoint = None
         self.codex = {}             # ключ записи → прочитана ли
         self.goals_done = set()
+        self.contracts = {}   # id -> {'status': 'active'|'done', 'start_kills': int}
         self.clock_offset = 0.0     # сдвиг суток (консоль: time)
         self.god = False            # консоль: неуязвимость
         self.last_loss = None       # сводка для экрана гибели
@@ -265,8 +285,20 @@ class World:
             sig *= 0.05
         return sig
 
+    def port_position(self, port_key=None):
+        return self.platform if (port_key or self.active_port) == "platform" else self.port
+
+    def dockable_port(self):
+        """Dock only near a hub and below the speed limit."""
+        if self.player.speed >= C.DOCK_MAX_SPEED:
+            return None
+        for key in ("port", "platform"):
+            if self.player.pos.distance_to(self.port_position(key)) < C.PORT_RADIUS:
+                return key
+        return None
+
     def can_dock(self):
-        return self.player.pos.distance_to(self.port) < C.PORT_RADIUS and self.player.speed < C.DOCK_MAX_SPEED
+        return self.dockable_port() is not None
 
     def perceives(self, pos):
         """Игрок видит точку глазами или радаром."""
@@ -280,6 +312,7 @@ class World:
 
     def update(self, dt, ctl: Controls):
         self.t += dt
+        self.update_market()
         p = self.player
         self.events.update(self.t, p.pos)
         for ev in self.events.started:
@@ -332,6 +365,7 @@ class World:
         self.smokes = [s for s in self.smokes if s.life > 0]
 
         self._update_memory(dt, density)
+        self._update_escort_contract(dt)
         if self.god:
             p.hp = p.hull.hp
             p.fires = p.leaks = 0
@@ -406,6 +440,12 @@ class World:
             if density > 0.75:
                 self.discover("amnesia")
         self._reveal()
+        mission = self.contracts.get("scout")
+        if (mission and mission["status"] == "active" and not mission["explored"]
+                and not self.in_capsule
+                and p.pos.distance_to(self.scout_position()) <= self.SCOUT_RADIUS):
+            mission["explored"] = True
+            self.say("Район разведан! Вернитесь в порт за наградой.", "good")
         if self.waypoint is not None and p.pos.distance_to(self.waypoint) < 120:
             self.waypoint = None
             self.say("Путевая точка достигнута.")
@@ -519,7 +559,6 @@ class World:
         if stock[self.ammo_type] == 0:
             self.say(f"{AMMO[self.ammo_type].name} снаряды кончились — стандартные.")
             self.ammo_type = "std"
-        self.spotlight = False
 
     def _activate_utility(self, idx):
         p = self.player
@@ -701,6 +740,10 @@ class World:
     def _update_projectiles(self, dt):
         p = self.player
         keep = []
+        # Broad phase is shared by all player projectiles this frame.
+        # NPC positions are already updated; dead ships remain indexed but
+        # are ignored by the exact live check, preserving hit order.
+        target_grid = ShipCollisionGrid(x.ship for x in self.pirates) if self.projectiles else None
         for pr in self.projectiles:
             update_projectile(pr, dt, self.density_at(pr.pos), self.rng)
             if island_at(self.islands, pr.pos):                 # снаряд разбился о скалы
@@ -709,12 +752,11 @@ class World:
                 else:
                     self.emit("rock", Vector2(pr.pos))
                 continue
-            targets = [x.ship for x in self.pirates] if pr.side == "player" else [p]
-            hit = None
-            for ship in targets:
-                if ship.alive and ship.pos.distance_to(pr.pos) < ship.radius + (4 if pr.kind != "shell" else 0):
-                    hit = ship
-                    break
+            padding = 4 if pr.kind != "shell" else 0
+            if pr.side == "player":
+                hit = target_grid.first_hit(pr.pos, padding)
+            else:
+                hit = p if ship_overlaps(p, pr.pos, padding) else None
             if hit is not None:
                 fires, leaks = hit.fires, hit.leaks
                 armor, hp, shield = hit.armor, hit.hp, hit.shield
@@ -817,14 +859,350 @@ class World:
         self.in_capsule = True
         self.say("Корабль потерян! Капсула отстрелена — доберитесь до порта.")
 
+    # --- контракты: первый игровой срез (порт) ----------------------------
+
+    CONTRACTS = {
+        "salt": ("Поставка соль-металла", 10, 250),
+        "pirates": ("Охота на рейдеров", 2, 350),
+        "scout": ("Разведка Пелены", 1, 300),
+        "escort": ("Сопровождение конвоя", 1, 450),
+        "urgent": ("Срочная поставка", 10, 300),
+        "guild": ("Гильдейский заказ", 12, 600),
+        "master": ("Мастерский заказ", 18, 900),
+    }
+    SCOUT_POS = (4000.0, 3600.0)
+    SCOUT_RADIUS = 320.0
+    SCOUT_ZONES = ((4000.0, 3600.0), (3500.0, 3200.0),
+                   (4500.0, 4200.0), (3100.0, 4800.0))
+
+    URGENT_THRESHOLD = 60
+    URGENT_QUANTITY = 10
+    GUILD_ORDER_QUANTITY = 12
+    MASTER_ORDER_QUANTITY = 18
+
+    def guild_rank(self, port_key=None):
+        return rank(self.guild_reputation[port_key or self.active_port])
+
+    def service_discount(self, port_key=None):
+        return discount(self.guild_reputation[port_key or self.active_port])
+
+    def guild_order_available(self):
+        return self.guild_reputation[self.active_port] >= PARTNER_AT
+
+    def master_order_available(self):
+        return self.guild_reputation[self.active_port] >= MASTER_AT
+
+    def guild_progress(self, port_key=None):
+        points = self.guild_reputation[port_key or self.active_port]
+        target, name = next_rank(points)
+        return points, target, name
+
+    def urgent_offer(self):
+        """Pick a shortage in the *other* port; don't fabricate demand.
+
+        Select only commodities stocked at the origin. Ordering is stable for
+        identical inventories, so reopening the board doesn't reroll offers.
+        """
+        origin = self.active_port
+        destination = "platform" if origin == "port" else "port"
+        options = []
+        for kind in ("salt", "filament"):
+            missing = self.URGENT_THRESHOLD - self.market_available(kind, destination)
+            if (missing > 0 and self.market_available(kind, origin) >= self.URGENT_QUANTITY):
+                options.append((missing, kind))
+        if not options:
+            return None
+        shortage, kind = max(options, key=lambda item: (item[0], item[1]))
+        return {
+            "origin": origin, "destination": destination, "kind": kind,
+            "amount": self.URGENT_QUANTITY,
+            "reward": 300 + 4 * shortage,
+        }
+
+    def contract_terms(self, key):
+        """Deterministic offer for a cycle; no extra RNG state to save."""
+        name, target, reward = self.CONTRACTS[key]
+        if key == "urgent":
+            offer = self.contracts.get(key) or self.urgent_offer()
+            if offer is not None:
+                return name, offer["amount"], offer["reward"]
+            return name, target, reward
+        if key in ("guild", "master"):
+            order = self.contracts.get(key)
+            if order is not None:
+                return name, order["amount"], order["reward"]
+            return name, target, reward
+        state = self.contracts.get(key) or {}
+        cycle = state.get("cycle", 0)
+        if cycle > 0:
+            rng = random.Random(f"{self.seed}:{key}:{cycle}")
+            if key == "salt":
+                target = rng.choice((8, 10, 12, 15, 18))
+                reward = 80 + target * 17
+            elif key == "pirates":
+                target = rng.randint(1, 3)
+                reward = 170 * target
+            elif key == "scout":
+                reward = rng.choice((280, 320, 375, 420))
+            elif key == "escort":
+                reward = rng.choice((420, 480, 540, 600))
+        return name, target, reward
+
+    def scout_position(self):
+        """Each reconnaissance contract cycle explores another sea region."""
+        state = self.contracts.get("scout") or {}
+        cycle = state.get("cycle", 0)
+        if cycle <= 0:
+            return Vector2(self.SCOUT_POS)
+        rng = random.Random(f"{self.seed}:scout-position:{cycle}")
+        return Vector2(self.SCOUT_ZONES[1 + rng.randrange(len(self.SCOUT_ZONES) - 1)])
+
+    ESCORT_RADIUS = 240.0
+    ESCORT_REQUIRED_SECONDS = 15.0
+    ESCORT_ARRIVAL_RADIUS = 450.0
+
+    def _new_escort_state(self, cycle):
+        """Choose the convoy and the port it must depart from."""
+        return {
+            "status": "active", "start_kills": self.captain.kills,
+            "cycle": cycle, "origin": self.active_port,
+            "convoy": cycle % 2, "leg": -1,
+            "close_seconds": 0.0, "arrived": False,
+        }
+
+    def _update_escort_contract(self, dt):
+        state = self.contracts.get("escort")
+        if not state or state["status"] != "active" or state["arrived"]:
+            return
+        if self.in_capsule or dt <= 0:
+            return
+        index = state["convoy"]
+        # TradeTraffic reports the current scheduled leg (or docked stop).
+        leg, direction, moving = self.trade_traffic.leg(index, self.t)
+        expected = 1 if state["origin"] == "port" else -1
+        merchant = self.trade_traffic.snapshot(self.t)[index]
+        if moving and direction == expected:
+            if state["leg"] != leg:
+                state["leg"] = leg
+                state["close_seconds"] = 0.0
+            if self.player.pos.distance_to(merchant.pos) <= self.ESCORT_RADIUS:
+                state["close_seconds"] += dt
+        elif (not moving and state["leg"] >= 0
+              and leg == state["leg"] and direction == expected
+              and state["close_seconds"] >= self.ESCORT_REQUIRED_SECONDS):
+            destination = self.platform if expected == 1 else self.port
+            if self.player.pos.distance_to(destination) <= self.ESCORT_ARRIVAL_RADIUS:
+                state["arrived"] = True
+                self.say("Конвой прибыл! Контракт можно сдать в порту.", "good")
+
+    def renew_contract(self, key):
+        """Explicitly start a new job after the previous reward was claimed."""
+        state = self.contracts.get(key)
+        if key not in self.CONTRACTS or state is None or state["status"] != "done":
+            return False
+        cycle = state.get("cycle", 0) + 1
+        if key == "master":
+            if not self.master_order_available():
+                return False
+            self.contracts[key] = {
+                "status": "active", "start_kills": self.captain.kills,
+                "cycle": cycle, "hub": self.active_port,
+                "amount": self.MASTER_ORDER_QUANTITY, "reward": 900,
+            }
+            self.say("Новый мастерский заказ гильдии принят.")
+            return True
+        if key == "guild":
+            if not self.guild_order_available():
+                return False
+            self.contracts[key] = {
+                "status": "active", "start_kills": self.captain.kills,
+                "cycle": cycle, "hub": self.active_port,
+                "amount": self.GUILD_ORDER_QUANTITY, "reward": 600,
+            }
+            self.say("Новый гильдейский заказ принят.")
+            return True
+        if key == "urgent":
+            offer = self.urgent_offer()
+            if offer is None:
+                return False
+            self.contracts[key] = {
+                "status": "active", "start_kills": self.captain.kills,
+                "cycle": cycle, **offer,
+            }
+            self.say(f"Новый срочный заказ: {offer['kind']} → {offer['destination']}")
+            return True
+        self.contracts[key] = {
+            "status": "active", "start_kills": self.captain.kills, "cycle": cycle
+        }
+        if key == "scout":
+            self.contracts[key]["explored"] = False
+        elif key == "escort":
+            self.contracts[key] = self._new_escort_state(cycle)
+        self.say(f"Новый контракт: {self.CONTRACTS[key][0]} (заказ №{cycle + 1})")
+        return True
+
+    def contract_label(self, key):
+        name, amount, reward = self.contract_terms(key)
+        state = self.contracts.get(key)
+        if key == "master":
+            if state is None:
+                if not self.master_order_available():
+                    return f"Мастерский заказ — доступен при репутации {MASTER_AT}"
+                return f"Мастерский заказ: конденсат ×{amount}, награда {reward} КК"
+            if state["status"] == "done":
+                return "Мастерский заказ выполнен — взять следующий"
+            progress = min(amount, int(self.captain.cargo.get("condensate", 0)))
+            return (f"Мастерский заказ ({state['hub']}): конденсат "
+                    f"{progress}/{amount}, {reward} КК")
+        if key == "guild":
+            if state is None:
+                if not self.guild_order_available():
+                    return f"Гильдейский заказ — доступен при репутации {PARTNER_AT}"
+                return f"Гильдейский заказ: соль-металл ×{amount}, награда {reward} КК"
+            if state["status"] == "done":
+                return "Гильдейский заказ выполнен — получить новый"
+            progress = min(amount, int(self.captain.cargo.get("salt", 0)))
+            return (f"Гильдейский заказ ({state['hub']}): соль-металл "
+                    f"{progress}/{amount}, {reward} КК")
+        if key == "urgent":
+            if state is None:
+                offer = self.urgent_offer()
+                if offer is None:
+                    return "Срочная поставка — дефицитных заказов сейчас нет"
+                return (f"Срочная поставка: {offer['kind']} ×{amount} → "
+                        f"{offer['destination']}, награда {reward} КК")
+            if state["status"] == "done":
+                return "Срочная поставка выполнена — проверить новый заказ"
+            have = int(self.captain.cargo.get(state["kind"], 0))
+            return (f"Срочная поставка: {state['kind']} {min(have, amount)}/{amount}"
+                    f" → {state['destination']} ({reward} КК)")
+        if state is None:
+            return f"Контракт: {name} ({amount}) — принять, награда {reward} КК"
+        if state["status"] == "done":
+            return f"Контракт: {name} — выполнен. Взять новый заказ"
+        if key == "salt":
+            progress = min(amount, int(self.captain.cargo.get("salt", 0)))
+        elif key == "scout":
+            progress = int(state["explored"])
+        elif key == "escort":
+            progress = int(state["arrived"])
+            if not progress:
+                seconds = min(self.ESCORT_REQUIRED_SECONDS, state["close_seconds"])
+                return (f"Контракт: {name} — {seconds:.0f}/{self.ESCORT_REQUIRED_SECONDS:.0f} с "
+                        f"рядом с конвоем №{state['convoy'] + 1}")
+        else:
+            progress = min(amount, max(0, self.captain.kills - state["start_kills"]))
+        return f"Контракт: {name} {progress}/{amount} — сдать в порту"
+
+    def contract_action(self, key):
+        """Accept or turn in a contract. A reward can be claimed only once."""
+        if key not in self.CONTRACTS:
+            return False
+        state = self.contracts.get(key)
+        if state is None:
+            if key == "master":
+                if not self.master_order_available():
+                    return False
+                self.contracts[key] = {
+                    "status": "active", "start_kills": self.captain.kills,
+                    "cycle": 0, "hub": self.active_port,
+                    "amount": self.MASTER_ORDER_QUANTITY, "reward": 900,
+                }
+                self.say("Принят мастерский заказ гильдии.")
+                return True
+            if key == "guild":
+                if not self.guild_order_available():
+                    return False
+                self.contracts[key] = {
+                    "status": "active", "start_kills": self.captain.kills,
+                    "cycle": 0, "hub": self.active_port,
+                    "amount": self.GUILD_ORDER_QUANTITY, "reward": 600,
+                }
+                self.say("Принят гильдейский заказ.")
+                return True
+            if key == "urgent":
+                offer = self.urgent_offer()
+                if offer is None:
+                    return False
+                self.contracts[key] = {
+                    "status": "active", "start_kills": self.captain.kills,
+                    "cycle": 0, **offer,
+                }
+                self.say("Принят срочный заказ. Доставьте товар в другой порт.")
+                return True
+            self.contracts[key] = {"status": "active", "start_kills": self.captain.kills}
+            if key == "scout":
+                self.contracts[key]["explored"] = False
+            elif key == "escort":
+                self.contracts[key] = self._new_escort_state(0)
+            self.say(f"Принят контракт: {self.CONTRACTS[key][0]}")
+            return True
+        if state["status"] != "active":
+            return False
+        _, amount, reward = self.contract_terms(key)
+        if key == "salt":
+            if self.captain.cargo.get("salt", 0) + 1e-6 < amount:
+                return False
+            self.captain.cargo["salt"] -= amount
+            if self.captain.cargo["salt"] <= 1e-6:
+                del self.captain.cargo["salt"]
+        elif key == "scout":
+            if not state["explored"]:
+                return False
+        elif key == "escort":
+            if not state["arrived"]:
+                return False
+        elif key == "master":
+            if (self.active_port != state["hub"]
+                    or self.captain.cargo.get("condensate", 0) + 1e-6 < amount):
+                return False
+            self.captain.cargo["condensate"] -= amount
+            if self.captain.cargo["condensate"] <= 1e-6:
+                del self.captain.cargo["condensate"]
+            self.market_stock[self.active_port]["condensate"] = min(
+                MAX_STOCK, self.market_available("condensate") + amount)
+        elif key == "guild":
+            if (self.active_port != state["hub"]
+                    or self.captain.cargo.get("salt", 0) + 1e-6 < amount):
+                return False
+            self.captain.cargo["salt"] -= amount
+            if self.captain.cargo["salt"] <= 1e-6:
+                del self.captain.cargo["salt"]
+            self.market_stock[self.active_port]["salt"] = min(
+                MAX_STOCK, self.market_available("salt") + amount)
+        elif key == "urgent":
+            kind = state["kind"]
+            if (self.active_port != state["destination"]
+                    or self.captain.cargo.get(kind, 0) + 1e-6 < amount):
+                return False
+            self.captain.cargo[kind] -= amount
+            if self.captain.cargo[kind] <= 1e-6:
+                del self.captain.cargo[kind]
+            self.market_stock[state["destination"]][kind] = min(
+                MAX_STOCK, self.market_stock[state["destination"]][kind] + amount)
+        elif self.captain.kills - state["start_kills"] < amount:
+            return False
+        state["status"] = "done"
+        self.captain.credits += reward
+        if key == "master":
+            self.captain.guild_certificates = min(
+                9999, self.captain.guild_certificates + 1)
+        gained = add_reputation(self.guild_reputation, self.active_port, key)
+        extra = ", сертификат гильдии +1" if key == "master" else ""
+        self.say(f"Контракт выполнен: +{reward} КК, доверие +{gained}{extra}", "good")
+        return True
+
     # --- порт: сервис -----------------------------------------------------
 
     def dock(self):
-        """Вызывается при заходе в порт. Капсула получает новый корабль."""
+        """Enter the nearby hub."""
+        # The input layer checks can_dock(); direct World.dock() calls also
+        # support existing scripted rescue/test flows away from the port.
+        self.active_port = self.dockable_port() or "port"
         cap = self.captain
         if self.in_capsule:
             self.in_capsule = False
-            self.player = Ship("scout", self.port, -90)
+            self.player = Ship("scout", self.port_position(), -90)
             if cap.pending_insurance:
                 cap.credits += cap.pending_insurance
                 self.say(f"Страховка выплачена: {cap.pending_insurance} КК. Выдан Скаут.")
@@ -833,6 +1211,7 @@ class World:
                 self.say("Порт выдал вам списанный Скаут.")
         self.player.vel = Vector2()
         self.player.recharge()
+        return True
 
     def undock_problems(self):
         p = self.player
@@ -846,15 +1225,137 @@ class World:
         return problems
 
     def undock(self):
-        self.player.pos = self.port + Vector2(0, -C.PORT_RADIUS - 40)
+        self.player.pos = self.port_position() + Vector2(0, -C.PORT_RADIUS - 40)
         self.player.angle = -90
 
+    def update_market(self):
+        """Count convoy arrivals once since the last market tick."""
+        if self.t < self.market_last_time:
+            # Console time travel cannot generate duplicate historic deliveries.
+            self.market_last_time = self.t
+            return
+        arrivals = apply_deliveries(self.market_stock, self.trade_traffic,
+                                    self.market_last_time, self.t, seed=self.seed)
+        self.market_last_time = self.t
+        if arrivals["port"] or arrivals["platform"]:
+            self.say("Торговые конвои пополнили складские запасы.")
+
+    def market_event(self):
+        return current_event(self.seed, self.t)
+
+    def market_bulletin(self):
+        return latest_news(self.seed, self.t)
+
+    def market_price(self, kind, buying=False, port_key=None):
+        """Demand surges affect both bid and ask; local buying still costs more."""
+        hub = port_key or self.active_port
+        price = unit_price(hub, kind, self.market_stock)
+        price = max(1, round(price * demand_multiplier(self.seed, self.t, hub, kind)))
+        return max(price + 1, math.ceil(price * C.MARKET_BUY_MARKUP)) if buying else price
+
+    def market_available(self, kind, port_key=None):
+        if kind not in RESOURCES:
+            return 0
+        return self.market_stock[port_key or self.active_port][kind]
+
+    GUILD_GOODS_AT = 50
+    GUILD_GOODS_QUANTITY = 5
+    GUILD_REWARD_MODULE = "guild_hold_mk2"
+
+    def redeem_guild_certificate(self):
+        """Trade one earned certificate for a non-retail storage module."""
+        if (self.guild_reputation[self.active_port] < self.GUILD_HOLD_AT
+                or self.captain.guild_certificates < 1
+                or self.captain.debt > 0):
+            return False
+        self.captain.guild_certificates -= 1
+        self.captain.storage.append(self.GUILD_REWARD_MODULE)
+        self.discover(f"module:{self.GUILD_REWARD_MODULE}")
+        return True
+
+    GUILD_HOLD_COST = 650
+    GUILD_HOLD_AT = 75
+
+    def guild_goods_cost(self):
+        """Five reserve filaments at 10% off local buying price."""
+        return max(1, math.ceil(
+            self.market_price("filament", buying=True)
+            * self.GUILD_GOODS_QUANTITY * 0.90))
+
+    def buy_guild_goods(self):
+        """Guild reserve stock is ordinary inventory, not generated from air."""
+        amount = self.GUILD_GOODS_QUANTITY
+        if (self.guild_reputation[self.active_port] < self.GUILD_GOODS_AT
+                or self.captain.debt > 0
+                or self.market_available("filament") < amount
+                or self.cargo_used + amount > self.cargo_capacity):
+            return False
+        cost = self.guild_goods_cost()
+        if self.captain.credits < cost:
+            return False
+        self.captain.credits -= cost
+        self.market_stock[self.active_port]["filament"] -= amount
+        self.captain.cargo["filament"] = self.captain.cargo.get("filament", 0) + amount
+        return True
+
+    def buy_guild_hold_upgrade(self):
+        """Reinforce the current hull once; replacement hulls need a new rack."""
+        if (self.guild_reputation[self.active_port] < self.GUILD_HOLD_AT
+                or self.captain.debt > 0
+                or self.player.guild_hold_upgrade
+                or self.captain.credits < self.GUILD_HOLD_COST
+                or self.in_capsule):
+            return False
+        self.captain.credits -= self.GUILD_HOLD_COST
+        self.player.guild_hold_upgrade = True
+        return True
+
+    def buy_resource(self, kind, quantity=C.MARKET_PACK_SIZE):
+        """Purchase market cargo without exceeding credit or hold limits."""
+        if (kind not in RESOURCES or type(quantity) is not int
+                or not 1 <= quantity <= C.MARKET_PACK_SIZE
+                or self.market_available(kind) < quantity):
+            return False
+        cost = self.market_price(kind, buying=True) * quantity
+        if self.captain.debt or self.captain.credits < cost:
+            return False
+        if self.cargo_used + quantity > self.cargo_capacity:
+            return False
+        self.captain.credits -= cost
+        self.captain.cargo[kind] = self.captain.cargo.get(kind, 0) + quantity
+        self.market_stock[self.active_port][kind] -= quantity
+        return True
+
+    def sell_resource(self, kind, quantity=C.MARKET_PACK_SIZE):
+        """Sell up to one pack, preserving the rest of the hold."""
+        if kind not in RESOURCES or type(quantity) is not int or quantity <= 0:
+            return False
+        have = self.captain.cargo.get(kind, 0)
+        if have <= 0:
+            return False
+        take = min(have, quantity)
+        value = int(self.market_price(kind) * take)
+        if value <= 0:
+            return False
+        self.captain.cargo[kind] = have - take
+        if self.captain.cargo[kind] <= 1e-6:
+            del self.captain.cargo[kind]
+        self.captain.credits += value
+        self.market_stock[self.active_port][kind] = min(
+            MAX_STOCK, self.market_available(kind) + int(take))
+        self.complete("sell")
+        return True
+
     def cargo_value(self):
-        return int(sum(RESOURCES[k].price * v for k, v in self.captain.cargo.items()))
+        return int(sum(self.market_price(k) * v for k, v in self.captain.cargo.items()))
 
     def sell_cargo(self):
         value = self.cargo_value()
         self.captain.credits += value
+        for kind, amount in self.captain.cargo.items():
+            if kind in RESOURCES:
+                self.market_stock[self.active_port][kind] = min(
+                    MAX_STOCK, self.market_available(kind) + int(amount))
         self.captain.cargo = {}
         if value > 0:
             self.complete("sell")
@@ -871,7 +1372,7 @@ class World:
         cost = (p.hull.hp - p.hp) * C.REPAIR_COST_PER_HP + (p.armor_max - p.armor) * ARMOR_REPAIR_COST
         cost += sum(1.0 - p.subsystems[k] for k in SUBSYSTEMS) * SUBSYSTEM_REPAIR_COST
         cost += (p.leaks + p.water * 3) * LEAK_REPAIR_COST
-        return int(math.ceil(cost))
+        return int(math.ceil(cost * (1.0 - self.service_discount())))
 
     def repair(self):
         cost = self.repair_cost()
@@ -885,7 +1386,7 @@ class World:
         p = self.player
         cost = sum((w.defn.ammo - w.ammo) * w.defn.ammo_price for w in p.weapons if w.defn.ammo)
         cost += sum((u.defn.charges - u.charges) * u.defn.charge_price for u in p.utilities if u.defn.charges)
-        return cost
+        return int(math.ceil(cost * (1.0 - self.service_discount())))
 
     def rearm(self):
         cost = self.rearm_cost()
@@ -978,10 +1479,15 @@ class World:
 
     def compatible(self, slot_index):
         slot = self.player.hull.slots[slot_index]
-        return [m for m in MODULES.values() if m.category == slot.category and m.size <= slot.size]
+        return [m for m in MODULES.values()
+                if m.key != self.GUILD_REWARD_MODULE
+                and m.category == slot.category and m.size <= slot.size]
 
-    def install(self, slot_index, key, from_storage=False):
-        """Поставить модуль в слот. Возвращает None или текст ошибки."""
+    def install_problem(self, slot_index, key, from_storage=False):
+        """Проверка установки без каких-либо изменений денег, склада или корабля.
+
+        Используется и в интерфейсе предпросмотра, и в самой транзакции.
+        """
         p, cap = self.player, self.captain
         slot = p.hull.slots[slot_index]
         m = MODULES[key]
@@ -990,6 +1496,8 @@ class World:
         if from_storage and key not in cap.storage:
             return "Нет на складе"
         if not from_storage:
+            if key == self.GUILD_REWARD_MODULE:
+                return "Гильдейский модуль получают только за сертификат"
             if cap.debt > 0:
                 return "Должникам не продают"
             if cap.credits < m.price:
@@ -997,8 +1505,15 @@ class World:
         new_fit = list(p.fit)
         new_fit[slot_index] = key
         power = [e for e in fit_problems(p.hull, new_fit) if "энергии" in e]
-        if power:
-            return power[0]
+        return power[0] if power else None
+
+    def install(self, slot_index, key, from_storage=False):
+        """Поставить модуль в слот. Возвращает None или текст ошибки."""
+        issue = self.install_problem(slot_index, key, from_storage=from_storage)
+        if issue:
+            return issue
+        p, cap = self.player, self.captain
+        m = MODULES[key]
         if from_storage:
             cap.storage.remove(key)
         else:
@@ -1031,7 +1546,7 @@ class World:
 
     def sell_from_storage(self, key):
         cap = self.captain
-        if key not in cap.storage:
+        if key not in cap.storage or key == self.GUILD_REWARD_MODULE:
             return 0
         cap.storage.remove(key)
         price = int(MODULES[key].price * MODULE_RESALE)

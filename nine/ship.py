@@ -79,6 +79,44 @@ def fit_problems(hull, fit):
     return problems
 
 
+def layout_balance(hull, fit):
+    """Физически упрощённый баланс модулей: (смещение к борту, разнос, поворот).
+
+    Учитывает оружейные координаты и проектные точки внутренних модулей.
+    Полная масса корпуса остаётся симметричной; груз и повреждения
+    учитываются существующей физикой отдельно. Старые корпуса неизменны.
+    """
+    if hull.visual_style != "industrial_sci_fi":
+        return 0.0, 0.0, 1.0
+    max_x = max(abs(x) for x, _ in hull.shape)
+    max_y = max(abs(y) for _, y in hull.shape)
+    if max_x <= 0 or max_y <= 0:
+        return 0.0, 0.0, 1.0
+
+    installed = []
+    for slot, key in zip(hull.slots, fit):
+        if key is None:
+            continue
+        position = slot.pos if slot.category == "weapon" else slot.diagram_pos
+        if position is None:
+            continue
+        installed.append((MODULES[key].mass, position))
+    module_mass = sum(m for m, _ in installed)
+    if module_mass <= 0:
+        return 0.0, 0.0, 1.0
+
+    # +Y — правый борт. Оба показателя безразмерные и ограничены 0..1.
+    side = sum(m * y / max_y for m, (_, y) in installed) / module_mass
+    spread = sum(m * (0.7 * (x / max_x) ** 2 + 0.3 * (y / max_y) ** 2)
+                 for m, (x, y) in installed) / module_mass
+    side = max(-1.0, min(1.0, side))
+    spread = max(0.0, min(1.0, spread))
+    # Слабый эффект, чтобы схема расширяла варианты сборки, а не
+    # заставляла всегда выбирать один идеальный набор модулей.
+    turn_factor = max(0.85, 1.0 - 0.08 * abs(side) - 0.08 * spread)
+    return side, spread, turn_factor
+
+
 class WeaponMount:
     def __init__(self, index, slot, defn: WeaponDef):
         self.index = index
@@ -159,6 +197,7 @@ class Ship:
         self.boosting = False
         self.fouling = 0.0
         self.cargo_mass = 0.0
+        self.guild_hold_upgrade = False
         self.shield_cd = 0.0
         self.brownout = False
         self.reload_penalty = 1.0          # внешние штрафы (травма капитана)
@@ -200,6 +239,8 @@ class Ship:
         self.armor_def = self._first(ArmorDef)
         self.sensor = self._first(SensorDef)
         self.module_mass = sum(m.mass for _, _, m in self.modules())
+        self.side_balance, self.mass_spread, self.layout_turn_factor = layout_balance(
+            self.hull, self.fit)
 
         self.shield_max = self.shield_def.capacity if self.shield_def else 0.0
         self.armor_max = self.armor_def.hp if self.armor_def else 0.0
@@ -297,7 +338,8 @@ class Ship:
 
     @property
     def cargo_capacity(self):
-        return int(self.hull.cargo + self.cargo_bonus)
+        return int(self.hull.cargo + self.cargo_bonus
+                   + (12 if self.guild_hold_upgrade else 0))
 
     @property
     def value(self):
@@ -372,7 +414,8 @@ class Ship:
         fwd = heading(self.angle)
         speed_k = 0.35 + 0.65 * min(1.0, self.speed / max(1.0, self.base_top_speed()))
         rudder = 0.3 + 0.7 * self.subsystems["rudder"]
-        turn_rate = self.hull.turn_rate * min(1.15, self.mass_factor()) * rudder
+        turn_rate = (self.hull.turn_rate * min(1.15, self.mass_factor())
+                     * self.layout_turn_factor * rudder)
         self.angle = (self.angle + turn * turn_rate * speed_k * dt) % 360
 
         if self.engine:

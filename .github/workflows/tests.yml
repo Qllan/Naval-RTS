@@ -1,0 +1,130 @@
+name: Python tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Test headlessly
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python -m pytest -q
+      - name: Spatial lookup benchmark (synthetic data, no gameplay)
+        run: python tools/benchmark_spatial.py --check
+      - name: Network interest benchmark (no gameplay, deterministic)
+        run: python tools/check_network_foundation.py --check
+      - name: Render new hull preview
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_hulls.py --output hull-preview.png
+      - name: Upload hull preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-hull-preview
+          path: hull-preview.png
+      - name: Render Bastion before-and-after art comparison
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_bastion_compare.py --output bastion-before-after.png
+      - name: Upload Bastion art comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-bastion-before-after
+          path: bastion-before-after.png
+      - name: Render real R1.2 module fitting variants
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_module_fit.py --output module-fit-r12.png
+      - name: Upload R1.2 fitting variants
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-module-fit-r12
+          path: module-fit-r12.png
+      - name: Render real R1.3 ocean and Veil scenes
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ocean.py --output ocean-veil-r13.png
+      - name: Upload R1.3 ocean / Veil preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ocean-veil-r13
+          path: ocean-veil-r13.png
+      - name: Render R1.4 real HUD / shipyard / fitting screenshots
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_interface.py --output ui-r14.png
+      - name: Upload R1.4 interface review
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ui-r14
+          path: ui-r14.png
+      - name: Render UX 2.0 ship-first fitting flow
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ux_fitting.py --output ux-fitting-v2.png
+      - name: Upload UX 2.0 fitting flow
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ux-fitting-v2
+          path: ux-fitting-v2.png
+      - name: Render UX 2.1 shipyard decisions
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ux_shipyard.py --output ux-shipyard-v2.png
+      - name: Upload UX 2.1 shipyard gallery
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ux-shipyard-v2
+          path: ux-shipyard-v2.png
+      - name: Render UX 2.2 battle HUD scenes
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ux_hud.py --output ux-hud-v22.png
+      - name: Upload UX 2.2 HUD review
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ux-hud-v22
+          path: ux-hud-v22.png
+      - name: Render UX 2.3 responsive and accessibility screenshots
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_ux_responsive.py --output-dir ux-responsive
+      - name: Upload UX 2.3 responsive review
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-ux-responsive-v23
+          path: ux-responsive/*.png
+      - name: Render fitting UI screenshots
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_fitting.py --output-dir fitting-previews
+      - name: Upload fitting UI screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-fitting-preview
+          path: fitting-previews/*.png

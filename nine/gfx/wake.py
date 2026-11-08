@@ -27,10 +27,11 @@ class Wakes:
     def __init__(self):
         self.trails = {}            # id(ship) → deque[(время, точка кормы, курс, скорость)]
         self._acc = 0.0
+        self.high_quality = True
 
     def update(self, ships, t, dt):
         self._acc += dt
-        take = self._acc >= SAMPLE_DT
+        take = self._acc >= (SAMPLE_DT if self.high_quality else SAMPLE_DT * 2)
         if take:
             self._acc = 0.0
         alive = set()
@@ -54,7 +55,7 @@ class Wakes:
                     del self.trails[key]
 
     def draw(self, screen, cam, t, daylight=1.0):
-        foam = P.mix((90, 110, 130), P.FOAM, 0.4 + 0.6 * daylight)
+        foam = P.mix(P.OCEAN_LIGHT, P.FOAM, 0.40 + 0.45 * daylight)
         for tr in self.trails.values():
             if len(tr) < 2:
                 continue
@@ -75,7 +76,9 @@ class Wakes:
                 width = hw * (0.5 + 0.35 * (1 - k)) * (0.75 + 0.25 * math.sin(i * 1.7 + ts_phase(tr)))
                 col = P.mix(P.OCEAN_MID, foam, 0.32 * k)
                 pygame.draw.line(screen, col, a, b, max(1, int(cam.px(width))))
-            # «усы» Кельвина
+            # «усы» Кельвина — secondary wakes omitted in low quality.
+            if not self.high_quality:
+                continue
             for arm in (left, right):
                 for (a, age_a, sp), (b, _, _) in zip(arm, arm[1:]):
                     k = max(0.0, 1.0 - age_a / LIFE) * min(1.0, sp / 100)
@@ -92,7 +95,7 @@ class Wakes:
             return
         k = min(1.0, sp / max(1.0, ship.base_top_speed()))
         prof = PROFILES[ship.hull.key]
-        foam = P.mix((90, 110, 130), P.FOAM, 0.4 + 0.6 * daylight)
+        foam = P.mix(P.OCEAN_LIGHT, P.FOAM, 0.40 + 0.45 * daylight)
         col = P.mix(P.OCEAN_MID, foam, 0.8 * k)
         for side in (-1, 1):
             pts = []

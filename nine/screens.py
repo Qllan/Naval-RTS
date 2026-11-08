@@ -185,6 +185,7 @@ class PauseMenu(Screen):
         self.menu = Menu([
             ("Продолжить", self.close),
             ("Карта", lambda: game.push(MapScreen(game))),
+            ("Журнал капитана", lambda: game.push(CaptainsJournal(game))),
             ("Кодекс", lambda: game.push(CodexScreen(game))),
             ("Настройки", lambda: game.push(SettingsScreen(game))),
             ("Справка по управлению", self.help),
@@ -574,7 +575,27 @@ class MapScreen(Screen):
                 _mark_icon(s, m["kind"], c, col)
                 label = m["label"] if m["clarity"] > 0.45 else "???"
                 ui.text(s, label, c + Vector2(9, -2), col, 15, anchor="midleft")
+        scout = world.contracts.get("scout")
+        if scout and scout["status"] == "active" and not scout["explored"]:
+            target = self.w2m(world.scout_position())
+            radius = max(4, round(world.SCOUT_RADIUS * self.SIZE / C.WORLD_W))
+            pygame.draw.circle(s, (110, 220, 205), target, radius, 2)
+            ui.text(s, "РАЗВЕДКА", target + Vector2(0, -radius - 5),
+                    (150, 240, 220), 15, anchor="midbottom")
+        escort_task = world.contracts.get("escort")
+        if escort_task and escort_task["status"] == "active" and not escort_task["arrived"]:
+            trader = world.trade_traffic.snapshot(world.t)[escort_task["convoy"]]
+            target = self.w2m(trader.pos)
+            pygame.draw.circle(s, (145, 230, 150), target, 8, 2)
+            ui.text(s, "КОНВОЙ", target + Vector2(0, -10),
+                    (145, 230, 150), 15, anchor="midbottom")
         if self.layers["contacts"] and not dead:
+            for trader in world.trade_traffic.snapshot(world.t):
+                if world.perceives(trader.pos) or world.on_radar(trader.pos):
+                    pygame.draw.circle(s, (95, 212, 190), self.w2m(trader.pos), 3)
+            for escort in world.trade_traffic.escort_snapshot(world.t):
+                if world.perceives(escort.pos) or world.on_radar(escort.pos):
+                    pygame.draw.circle(s, (145, 180, 255), self.w2m(escort.pos), 3, 1)
             for pi in world.pirates:
                 if world.on_radar(pi.ship.pos) or world.perceives(pi.ship.pos):
                     pygame.draw.circle(s, ui.BAD, self.w2m(pi.ship.pos), 3)
@@ -673,6 +694,99 @@ def _dashed(s, col, a, b, dash=8):
     step = d / n
     for i in range(0, n, 2):
         pygame.draw.line(s, col, a + step * i, a + step * (i + 1))
+
+
+# --- журнал капитана: текущие и завершённые контракты ----------------------------
+
+def journal_entries(world):
+    """Read-only mission snapshot. No claim/reward side effects."""
+    entries = []
+    for key, state in world.contracts.items():
+        if key not in world.CONTRACTS or not isinstance(state, dict):
+            continue
+        name, target, reward = world.contract_terms(key)
+        done = state.get("status") == "done"
+        if key == "salt":
+            current = min(target, int(world.captain.cargo.get("salt", 0)))
+            objective = "Доставить соль-металл"
+        elif key == "pirates":
+            current = min(target, max(0, world.captain.kills - state.get("start_kills", 0)))
+            objective = "Уничтожить рейдеров"
+        elif key == "scout":
+            current = int(bool(state.get("explored")))
+            objective = "Посетить отмеченную область Пелены"
+        elif key == "escort":
+            current = int(bool(state.get("arrived")))
+            origin = "Порта беженцев" if state["origin"] == "port" else "Платформы"
+            objective = f"Сопроводить конвой №{state['convoy'] + 1} от {origin}"
+        elif key == "urgent":
+            current = min(target, int(world.captain.cargo.get(state["kind"], 0)))
+            destination = "Порт беженцев" if state["destination"] == "port" else "Торговая платформа"
+            objective = f"Доставить {state['kind']} в {destination}"
+        elif key == "master":
+            current = min(target, int(world.captain.cargo.get("condensate", 0)))
+            destination = "Порт беженцев" if state["hub"] == "port" else "Торговая платформа"
+            objective = f"Мастер: доставить конденсат в {destination}"
+        elif key == "guild":
+            current = min(target, int(world.captain.cargo.get("salt", 0)))
+            destination = "Порт беженцев" if state["hub"] == "port" else "Торговая платформа"
+            objective = f"Гильдия: доставить соль-металл в {destination}"
+        else:
+            continue
+        status = "ЗАВЕРШЁН" if done else (
+            "МОЖНО СДАТЬ В ПОРТ" if current >= target
+            and (key != "urgent" or world.active_port == state["destination"])
+            and (key not in ("guild", "master") or world.active_port == state["hub"])
+            else "В РАБОТЕ"
+        )
+        entries.append((key, name, objective, current, target, reward, status))
+    return entries
+
+
+class CaptainsJournal(Screen):
+    """Mission journal is available at sea (J) and from the pause menu."""
+
+    def handle(self, e):
+        if e.type == pygame.KEYDOWN and e.key in (
+                pygame.K_ESCAPE, self.game.settings.key("journal")):
+            self.close()
+
+    def draw(self):
+        s = self.screen
+        dim(s, int(200 * self.k))
+        w, h = min(820, self.w - 40), min(550, self.h - 40)
+        r = self.slide(((self.w - w) // 2, (self.h - h) // 2, w, h))
+        ui.panel(s, r, "Журнал капитана")
+        entries = journal_entries(self.game.world)
+        active = sum(1 for e in entries if e[6] != "ЗАВЕРШЁН")
+        completed = len(entries) - active
+        ui.text(s, f"Активных: {active}    Завершено: {completed}",
+                (r.x + 22, r.y + 42), ui.DIM, 18)
+        if not entries:
+            ui.text(s, "Контрактов пока нет. Возьмите задание в порту.",
+                    r.center, ui.DIM, 20, anchor="center")
+        for i, (_, name, objective, current, target, reward, status) in enumerate(entries):
+            row_gap = min(90, max(54, (r.h - 170) // max(1, len(entries))))
+            y = r.y + 72 + i * row_gap
+            if y + row_gap - 4 > r.bottom - 85:
+                break
+            row = pygame.Rect(r.x + 18, y, r.w - 36, row_gap - 4)
+            pygame.draw.rect(s, ui.FAINT, row, 1)
+            ui.text(s, name, (row.x + 14, row.y + 5), ui.TEXT, 19, True)
+            ui.text(s, status, (row.right - 12, row.y + 12),
+                    ui.ACCENT if status != "В РАБОТЕ" else ui.DIM,
+                    16, anchor="topright")
+            ui.text(s, objective, (row.x + 14, row.y + 28), ui.DIM, 16)
+            progress = "Выполнено" if status == "ЗАВЕРШЁН" else f"{current}/{target}"
+            ui.text(s, f"Прогресс: {progress}    Награда: {reward} КК",
+                    (row.x + 14, row.y + 48), ui.TEXT, 15)
+        rep = self.game.world.guild_reputation
+        ui.text(s, f"Гильдия: Порт {rep['port']}/100 · Платформа {rep['platform']}/100",
+                (r.x + 22, r.bottom - 82), ui.DIM, 15)
+        ui.text(s, self.game.world.market_bulletin(),
+                (r.x + 22, r.bottom - 63), ui.ACCENT, 15)
+        ui.text(s, "J / Esc — закрыть. Награду можно получить в порту.",
+                (r.centerx, r.bottom - 23), ui.DIM, 16, anchor="midtop")
 
 
 # --- кодекс ----------------------------------------------------------------------------

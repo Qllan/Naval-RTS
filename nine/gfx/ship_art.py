@@ -7,17 +7,20 @@
 import math
 import random
 from collections import OrderedDict
+from functools import lru_cache
 
 import pygame
 from pygame.math import Vector2
 
 from ..hulls import HULLS
-from .palette import SHIP_PALETTES, mix, shade
+from .palette import SHIP_PALETTES, ShipPalette, mix, shade
+from .style_tokens import lod_for_length, rgb
 
 R = 6                    # пикселей на единицу в мастер-спрайте
 ANGLE_STEP = 2.0         # шаг кэша по углу, град
 ZOOM_STEP = 0.05
 CACHE_LIMIT = 5000
+MASTER_CACHE_LIMIT = 24  # Bound large R=6 hull surfaces across repeated refits
 
 # Полупрофили корпусов (нос → корма, y ≥ 0); зеркалятся на левый борт
 PROFILES = {
@@ -29,6 +32,39 @@ PROFILES = {
     "raider": [(20, 0), (13, 3.6), (4, 8.6), (-6, 9), (-11, 7), (-14, 6.4), (-13, 0)],
     "capsule": [(8.5, 0), (7, 3.6), (3, 5.8), (-3, 5.8), (-7, 3.6), (-8.5, 0)],
 }
+
+# Новые корпуса берут форму непосредственно из каталога, без второго
+# перечня ключей в рендерере. Старые профили сохраняются для совместимости.
+def _profile_from_shape(shape):
+    half = [(float(x), float(y)) for x, y in shape if y >= 0]
+    half.sort(key=lambda point: -point[0])
+    return half
+
+
+for _key, _definition in HULLS.items():
+    visual = _definition.visual
+    if visual is not None and visual.render_profile:
+        PROFILES.setdefault(_key, list(visual.render_profile))
+    else:
+        PROFILES.setdefault(_key, _profile_from_shape(_definition.shape))
+
+
+@lru_cache(maxsize=3)
+def industrial_palette(pal_key):
+    """Approved R1.0 metal palette for the three R1.1 industrial hulls.
+
+    Legacy ship palettes stay untouched. The faction marking remains
+    distinct from technical cyan and never recolors the entire hull.
+    """
+    signal = "signal_pirate" if pal_key == "pirate" else "signal_friendly"
+    return ShipPalette(
+        hull=rgb("steel_hull"), deck=rgb("steel_deck"),
+        plank=rgb("steel_seam"), trim=rgb("steel_shadow"),
+        superstructure=rgb("steel_roof"), roof=rgb("steel_edge"),
+        window=rgb("signal_window"), accent=rgb(signal),
+        turret=rgb("steel_armor"), armor=rgb("steel_armor"),
+    )
+
 
 # Надстройки: (x, y, длина, ширина, окна спереди)
 SUPERSTRUCTURE = {
@@ -46,6 +82,16 @@ LIFEBOATS = {"corvette": [(-3, 1)], "cruiser": [(-2, 1), (-11, 1)], "barge": [(-
 HATCHES = {"barge": [(14, 0, 7, 18), (-8, 0, 7, 18)]}
 MAST = {"scout": (-7.5, 0), "corvette": (-3, 0), "torpedo_boat": (1, 0), "cruiser": (5, 0), "barge": (-22.5, 0),
         "raider": (-10, 0), "capsule": (0, 0)}
+
+
+def superstructures(hull_key):
+    visual = HULLS[hull_key].visual
+    return visual.superstructures if visual is not None else SUPERSTRUCTURE.get(hull_key, ())
+
+
+def mast_position(hull_key):
+    visual = HULLS[hull_key].visual
+    return visual.mast if visual is not None else MAST.get(hull_key, (0, 0))
 
 
 def outline(key):
@@ -106,6 +152,82 @@ class _Canvas:
 
 # --- корпус -----------------------------------------------------------------
 
+def _industrial_details(cv, visual, pal):
+    """Крупные узнаваемые функциональные элементы без случайного декора.
+
+    Отрисовка происходит до башен и надстроек: оружие и мостики физически
+    перекрывают детали палубы, а не оказываются спрятаны за украшениями.
+    """
+    for detail in visual.details:
+        x, y = detail.pos
+        length, width = detail.size
+        if detail.kind == "sensor_rail":
+            cv.rect(x, y, length, width, shade(pal.trim, 1.15), radius=0.15)
+            cv.line((x - length * 0.4, y), (x + length * 0.4, y),
+                    pal.accent, 0.13)
+            for offset in (-0.25, 0, 0.25):
+                cv.line((x + length * offset, y - width * 0.35),
+                        (x + length * offset, y + width * 0.35),
+                        shade(pal.superstructure, 0.75), 0.18)
+        elif detail.kind == "cargo_cell":
+            cv.rect(x + 0.45, y + 0.45, length, width, (0, 0, 0, 65), radius=0.25)
+            cv.rect(x, y, length, width, shade(pal.deck, 0.53), radius=0.3)
+            cv.rect(x, y, length - 1, width - 1, shade(pal.roof, 0.78), radius=0.15)
+            for offset in (-0.27, 0, 0.27):
+                xx = x + length * offset
+                cv.line((xx, y - width * 0.36), (xx, y + width * 0.36),
+                        shade(pal.trim, 1.5), 0.2)
+        elif detail.kind == "armor_plate":
+            cv.rect(x + 0.45, y + 0.45, length, width, (0, 0, 0, 85), radius=0.2)
+            cv.rect(x, y, length, width, pal.armor, radius=0.18)
+            cv.rect(x, y, length - 0.7, width - 0.7,
+                    shade(pal.armor, 0.7), width=0.18, radius=0.18)
+            for sign in (-1, 1):
+                cv.circle(x + sign * (length / 2 - 0.85), y,
+                          0.25, shade(pal.trim, 1.35))
+        elif detail.kind == "radiator":
+            cv.rect(x, y, length, width, shade(pal.trim, 0.8), radius=0.15)
+            count = max(2, int(length / 1.2))
+            for i in range(count):
+                xx = x - length / 2 + length * (i + 0.5) / count
+                cv.line((xx, y - width * 0.37),
+                        (xx, y + width * 0.37),
+                        shade(pal.superstructure, 0.6), 0.22)
+        elif detail.kind == "spine_channel":
+            # Dark keel-service trench with two narrow reinforced shoulders.
+            cv.rect(x + 0.25, y + 0.25, length, width + 1.1,
+                    (0, 0, 0, 70), radius=0.12)
+            cv.rect(x, y, length, width + 0.8, shade(pal.deck, 0.58), radius=0.15)
+            for side in (-1, 1):
+                cv.line((x - length * 0.48, y + side * width * 0.5),
+                        (x + length * 0.48, y + side * width * 0.5),
+                        shade(pal.superstructure, 0.85), 0.22)
+            cv.line((x - length * 0.4, y), (x + length * 0.4, y),
+                    shade(pal.trim, 1.3), 0.16)
+        elif detail.kind == "shoulder_guard":
+            # Real layered armor with a cast shadow, a bright beveled edge
+            # and one service joint rather than randomized decoration.
+            cv.rect(x + 0.35, y + 0.35, length, width, (0, 0, 0, 75), radius=0.16)
+            cv.rect(x, y, length, width, pal.armor, radius=0.12)
+            cv.line((x - length * 0.45, y - width * 0.32),
+                    (x + length * 0.42, y - width * 0.32),
+                    shade(pal.armor, 1.36), 0.17)
+            cv.line((x, y - width * 0.38), (x, y + width * 0.38),
+                    shade(pal.trim, 1.35), 0.14)
+        elif detail.kind == "service_hatch":
+            # Tactile access panel; the warm dot signifies maintenance.
+            cv.rect(x + 0.28, y + 0.28, length, width, (0, 0, 0, 68), radius=0.18)
+            cv.rect(x, y, length, width, shade(pal.roof, 0.72), radius=0.16)
+            cv.rect(x, y, length - 0.6, width - 0.6,
+                    shade(pal.superstructure, 0.65), width=0.12, radius=0.1)
+            cv.circle(x - length * 0.28, y, 0.22, rgb("signal_amber"))
+            cv.line((x, y - width * 0.25), (x, y + width * 0.25),
+                    shade(pal.trim, 1.5), 0.16)
+        else:
+            raise ValueError(f"Unknown deck detail: {detail.kind}")
+
+
+
 def half_width(hull_key, x):
     """Полуширина корпуса в точке x (интерполяция по профилю)."""
     prof = PROFILES[hull_key]
@@ -120,7 +242,7 @@ def half_width(hull_key, x):
 
 def _blocked(hull_key, x, y, pad=3.5):
     """Занято ли место надстройкой или установкой оружия (чтобы не ставить туда мелочь)."""
-    for sx, sy, lx, ly, _ in SUPERSTRUCTURE.get(hull_key, []):
+    for sx, sy, lx, ly, _ in superstructures(hull_key):
         if abs(x - sx) < lx / 2 + 1 and abs(y - sy) < ly / 2 + 1:
             return True
     for slot in HULLS[hull_key].slots:
@@ -129,9 +251,156 @@ def _blocked(hull_key, x, y, pad=3.5):
     return False
 
 
+def _indexed_modules(hull_key, static_modules):
+    """Normalize old (key, module) and new (slot_index, module) callers.
+
+    The slot index is part of the sprite identity, so a module moved to
+    another fitting slot cannot reuse an incorrect cached hull image.
+    """
+    occupied = set()
+    result = []
+    slots = HULLS[hull_key].slots
+    for locator, module in static_modules:
+        if type(locator) is int:
+            index = locator
+        else:
+            index = next((i for i, slot in enumerate(slots)
+                          if i not in occupied and slot.category == module.category
+                          and module.size <= slot.size), None)
+        if index is None or not 0 <= index < len(slots) or index in occupied:
+            raise ValueError("Invalid duplicate/unknown installation slot")
+        slot = slots[index]
+        if slot.category != module.category or module.size > slot.size:
+            raise ValueError("Module incompatible with visual slot")
+        occupied.add(index)
+        result.append((index, module))
+    return tuple(result)
+
+
+def _industrial_fit_modules(cv, hull_key, pal, installations):
+    """R1.2: actual fitted components on their own schematic deck positions.
+
+    The position is taken only from the hull's non-weapon Slot.diagram_pos.
+    All pictograms are low-cost deterministic vector geometry and are drawn
+    atop the superstructure, so their functional identity survives a refit.
+    """
+    accent = rgb("signal_cyan")
+    low = rgb("signal_cyan_low")
+    amber = rgb("signal_amber")
+    for index, mod in installations:
+        slot = HULLS[hull_key].slots[index]
+        if slot.diagram_pos is None:
+            continue
+        x, y = slot.diagram_pos
+        category = slot.category
+        # Short sides of narrow hulls use thinner housings. Panels remain
+        # local to the actual illustrated outline, including B-31's keel.
+        max_width = max(1.4, 2 * (half_width(hull_key, x) - abs(y) - 0.35))
+        length = (6.4 if mod.size > 1 else 4.0)
+        width = min((4.6 if mod.size > 1 else 2.8), max_width)
+        small = width < 2.3
+        cv.rect(x + 0.25, y + 0.25, length + 0.45, width + 0.3,
+                (0, 0, 0, 95), radius=0.25)
+        cv.rect(x, y, length, width, shade(pal.trim, 1.35), radius=0.26)
+        cv.rect(x, y, length - 0.5, width - 0.45,
+                shade(pal.deck, 0.73), radius=0.18)
+        cv.line((x - length * 0.36, y - width * 0.35),
+                (x + length * 0.36, y - width * 0.35),
+                shade(pal.roof, 1.15), 0.16)
+        if category == "engine":
+            # A visible multi-channel turbine or high-output intake.
+            count = 3 if mod.key.endswith("2") else 2
+            for k in range(count):
+                yy = y + (k - (count - 1) / 2) * width * 0.47
+                cv.line((x - length * 0.33, yy), (x + length * 0.25, yy),
+                        shade(pal.trim, 1.65), 0.36)
+                cv.circle(x - length * 0.32, yy, 0.28, amber)
+            cv.rect(x + length * 0.32, y, 0.5, width * 0.6, amber, radius=0.1)
+        elif category == "reactor":
+            # Circular shielded core with output-class-dependent rings.
+            r = min(width * 0.38, 1.65)
+            cv.circle(x, y, r, shade(pal.armor, 0.68))
+            cv.circle(x, y, r * 0.67, accent if mod.key.endswith("2") else low)
+            if mod.key.endswith("2"):
+                cv.circle(x, y, r * 1.17, amber, width=0.15)
+            for side in (-1, 1):
+                cv.rect(x + side * length * 0.35, y, 0.48, width * 0.55,
+                        shade(pal.roof, 0.85), radius=0.1)
+        elif category == "shield":
+            # Regular emitter = twin fins; veil-resistant = cross lattice.
+            for sign in (-1, 1):
+                cv.line((x - length * 0.28, y + sign * width * 0.28),
+                        (x + length * 0.28, y + sign * width * 0.28),
+                        accent if mod.key == "shield_res_m" else low, 0.28)
+            if mod.key == "shield_res_m":
+                cv.line((x - length * 0.2, y - width * 0.25),
+                        (x + length * 0.2, y + width * 0.25),
+                        rgb("veil_fringe"), 0.27)
+                cv.line((x - length * 0.2, y + width * 0.25),
+                        (x + length * 0.2, y - width * 0.25),
+                        rgb("veil_fringe"), 0.27)
+            else:
+                cv.circle(x, y, width * 0.22, accent, width=0.24)
+        elif category == "armor":
+            # Stacked armor blocks vs visibly lighter fiber composite.
+            count = 3 if mod.key == "armor_comp_m" else 2
+            for k in range(count):
+                xx = x + (k - (count - 1) / 2) * length * 0.29
+                cv.rect(xx, y, max(0.6, length * 0.2), width * 0.75,
+                        shade(pal.armor, 1.1), radius=0.12)
+                if mod.key == "armor_comp_m":
+                    cv.line((xx - 0.4, y - width * 0.3),
+                            (xx + 0.4, y + width * 0.3), low, 0.16)
+        elif category == "sensor":
+            if mod.key == "sonar_m":
+                for sign in (-1, 1):
+                    cv.circle(x + sign * length * 0.17, y, width * 0.19, low,
+                              width=0.22)
+                cv.line((x - length * 0.25, y), (x + length * 0.25, y),
+                        shade(pal.roof, 1.2), 0.18)
+            else:
+                span = length * (0.36 if mod.key == "sensor_m" else 0.24)
+                cv.line((x, y - width * 0.38), (x, y + width * 0.38),
+                        shade(pal.roof, 1.3), 0.32)
+                cv.line((x - span, y), (x + span, y), accent, 0.34)
+                for sign in (-1, 1):
+                    cv.circle(x + sign * span, y, 0.3, low)
+        elif category == "utility":
+            effect = mod.effect
+            if effect == "cargo":
+                for sign in (-1, 0, 1):
+                    cv.rect(x + sign * length * 0.25, y, 0.75, width * 0.67,
+                            shade(pal.armor, 1.1), radius=0.08)
+            elif effect in ("repair", "damage_control"):
+                cv.line((x - 1.0, y), (x + 1.0, y), amber, 0.5)
+                cv.line((x, y - width * 0.35), (x, y + width * 0.35), amber, 0.5)
+            elif effect == "smoke":
+                for shift in (-0.85, 0, 0.85):
+                    cv.circle(x + shift, y, 0.38, shade(pal.roof, 0.8))
+            elif effect == "ecm":
+                cv.line((x - 1.2, y - width * 0.22), (x, y + width * 0.25), accent, 0.3)
+                cv.line((x, y + width * 0.25), (x + 1.2, y - width * 0.22), accent, 0.3)
+                cv.circle(x, y, 0.33, accent)
+            elif effect == "bioscreen":
+                cv.circle(x, y, width * 0.29, low, width=0.23)
+                cv.circle(x, y, width * 0.13, rgb("veil_fringe"))
+            elif effect == "drill":
+                cv.poly([(x - 1.3, y - width * 0.27), (x + 1.5, y),
+                         (x - 1.3, y + width * 0.27)], amber)
+            elif effect == "collector":
+                for sign in (-1, 0, 1):
+                    cv.circle(x + sign * 1.0, y, 0.35, low)
+            else:
+                cv.rect(x, y, 1.5, width * 0.5, amber, radius=0.1)
+        if not small:
+            cv.circle(x - length * 0.42, y - width * 0.27, 0.17, amber)
+
+
 def build_hull(hull_key, pal_key, static_modules, damage_level):
     """Мастер-спрайт корпуса со статичными модулями и следами повреждений."""
-    pal = SHIP_PALETTES[pal_key]
+    industrial = HULLS[hull_key].visual_style == "industrial_sci_fi"
+    installations = _indexed_modules(hull_key, static_modules)
+    pal = industrial_palette(pal_key) if industrial else SHIP_PALETTES[pal_key]
     pts = outline(hull_key)
     extent = max(max(abs(x), abs(y)) for x, y in pts) + 10
     cv = _Canvas(extent)
@@ -139,11 +408,11 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     stern = PROFILES[hull_key][-1][0]
     hw = max(y for _, y in PROFILES[hull_key])
     small = hull_key == "capsule"
-    rng = random.Random(hash((hull_key, pal_key)) & 0xffffff)
+    rng = random.Random(f"{hull_key}:{pal_key}") if HULLS[hull_key].visual is not None else (
+        random.Random(hash((hull_key, pal_key)) & 0xffffff))
     pirate = pal_key == "pirate"
-
     # --- борт: ватерлиния (сурик), обшивка, затенение правого борта
-    cv.poly(pts, (116, 42, 36) if not pirate else (92, 44, 30))
+    cv.poly(pts, (37, 55, 63) if industrial else (116, 42, 36) if not pirate else (92, 44, 30))
     inner = _scaled(pts, 0.985, 0.94)
     cv.poly(inner, pal.hull)
     cv.poly([(x, y) for x, y in inner if y >= 0] + [(stern * 0.985, 0)], shade(pal.hull, 0.8))
@@ -167,16 +436,31 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
     # доски рисуем на отдельном слое и обрезаем по форме палубы
     layer = _Canvas(extent)
     layer.poly(deck, pal.deck)
-    y = -half_w + 1.1
-    row = 0
-    while y < half_w:
-        layer.line((stern, y), (bow, y), pal.plank, 0.1)
-        x = stern + (row % 3) * 2.3
-        while x < bow:
-            layer.line((x, y), (x, y + 1.1), pal.plank, 0.08)
-            x += 7
-        y += 1.1
-        row += 1
+    if industrial:
+        # Швы и линии палубы из визуального чертежа.
+        visual = HULLS[hull_key].visual
+        for x in (visual.deck_ribs if visual else ()):
+            width = half_width(hull_key, x) * 0.68
+            if width > 2:
+                layer.line((x, -width), (x, width), shade(pal.deck, 0.64), 0.22)
+                for side in (-1, 1):
+                    layer.line((x + 1.1, side * (width - 1.2)),
+                               (x + 3.3, side * (width - 1.2)), shade(pal.deck, 1.23), 0.16)
+        for fraction in (visual.deck_strips if visual else ()):
+            for side in (-1, 1):
+                layer.line((stern + 7, side * half_w * fraction),
+                           (bow - 7, side * half_w * fraction), shade(pal.deck, 0.8), 0.14)
+    else:
+        y = -half_w + 1.1
+        row = 0
+        while y < half_w:
+            layer.line((stern, y), (bow, y), pal.plank, 0.1)
+            x = stern + (row % 3) * 2.3
+            while x < bow:
+                layer.line((x, y), (x, y + 1.1), pal.plank, 0.08)
+                x += 7
+            y += 1.1
+            row += 1
     mask = pygame.Surface(layer.surf.get_size(), pygame.SRCALPHA)
     pygame.draw.polygon(mask, (255, 255, 255, 255), [cv.p(x, y) for x, y in deck])
     layer.surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
@@ -219,8 +503,18 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
             cv.line((hx - lx / 2, hy - ly / 2 + k * ly / 4), (hx + lx / 2, hy - ly / 2 + k * ly / 4),
                     shade(pal.deck, 0.5), 0.15)
 
-    # --- носовое устройство: брашпиль, цепи, якоря
-    if not small:
+    # --- носовая аппаратура: индустриальные корпуса вместо якорной цепи
+    if industrial:
+        tx = bow * 0.74
+        cv.rect(tx, 0, 4.5, 3.0, shade(pal.superstructure, 0.62), radius=0.25)
+        cv.line((tx - 1.4, -0.85), (tx + 1.4, -0.85), pal.accent, 0.22)
+        for side in (-1, 1):
+            py = side * half_width(hull_key, stern * 0.52) * 0.58
+            for ix in range(3):
+                x = stern * 0.53 + ix * 2.0
+                cv.line((x, py - 0.6), (x + 0.5, py + 0.6),
+                        shade(pal.trim, 1.6), 0.28)
+    elif not small:
         wx = bow * 0.74
         cv.rect(wx, 0, 1.4, 2.6, shade(pal.trim, 1.3), radius=0.2)
         for side in (-1, 1):
@@ -233,6 +527,10 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
             ay = side * (half_width(hull_key, hx) + 0.4)
             cv.line((hx - 0.8, ay), (hx + 0.8, ay), (46, 46, 50), 0.25)          # якорь
             cv.line((hx, ay), (hx, ay + side * 0.9), (46, 46, 50), 0.2)
+
+    # --- характерные функциональные элементы для нового поколения корпусов
+    if industrial and HULLS[hull_key].visual is not None:
+        _industrial_details(cv, HULLS[hull_key].visual, pal)
 
     # --- основания башен
     for slot in HULLS[hull_key].slots:
@@ -257,10 +555,12 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
                 cv.circle(bx, by, 0.3, shade(pal.trim, 1.6))
                 cv.circle(bx + 0.8, by, 0.3, shade(pal.trim, 1.6))
 
-    _static_modules(cv, hull_key, pal, static_modules, bow, stern, half_w)
+    if not industrial:
+        _static_modules(cv, hull_key, pal,
+                        tuple((m.key, m) for _, m in installations), bow, stern, half_w)
 
     # --- надстройки: тень, корпус, крыша с оборудованием, крылья мостика, окна
-    for sx, sy, lx, ly, windows in SUPERSTRUCTURE.get(hull_key, []):
+    for sx, sy, lx, ly, windows in superstructures(hull_key):
         cv.rect(sx + 0.6, sy + 0.8, lx, ly, (0, 0, 0, 90), radius=0.8)
         if windows and not small:
             cv.rect(sx + lx / 2 - 1, sy, 2, ly + 2.4, pal.superstructure, radius=0.3)          # крылья мостика
@@ -280,6 +580,9 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
                 for k in range(max(1, int(lx / 2.2))):
                     cv.rect(sx - lx / 2 + 1 + k * 2.2, sy + side * (ly / 2 - 0.35), 0.8, 0.35,
                             shade(pal.window, 0.75), radius=0.05)
+    if industrial:
+        _industrial_fit_modules(cv, hull_key, pal, installations)
+
     for fx_, fy_, r in FUNNELS.get(hull_key, []):
         cv.circle(fx_ + 0.5, fy_ + 0.6, r, (0, 0, 0, 80))
         cv.circle(fx_, fy_, r, shade(pal.trim, 0.9))
@@ -295,19 +598,24 @@ def build_hull(hull_key, pal_key, static_modules, damage_level):
             cv.rect(lx, by, 4, 1.4, (215, 120, 60), radius=0.7)
             cv.line((lx - 1.6, by), (lx + 1.6, by), (240, 170, 110), 0.12)
 
-    # --- мачта с реем и такелаж
-    mx, my = MAST.get(hull_key, (0, 0))
-    if not small:
+    # --- мачта и сенсоры (на новой серии без парусного такелажа)
+    mx, my = mast_position(hull_key)
+    if not small and not industrial:
         yard = half_width(hull_key, mx) * 0.55
         rig = shade(pal.deck, 0.55)
         for tx_, ty_ in ((bow - 1, 0), (stern + 1, 0), (mx, -half_width(hull_key, mx) * 0.9),
                          (mx, half_width(hull_key, mx) * 0.9)):
             cv.line((mx, my), (tx_, ty_), rig, 0.07)
         cv.line((mx, -yard), (mx, yard), shade(pal.trim, 1.1), 0.22)
-    cv.circle(mx, my, 0.9, shade(pal.trim, 1.2))
+    if industrial:
+        cv.line((mx - 3, my), (mx + 3, my), shade(pal.trim, 1.4), 0.35)
+        cv.circle(mx, my, 1.3, shade(pal.superstructure, 0.68))
+        cv.circle(mx, my, 0.65, pal.accent)
+    else:
+        cv.circle(mx, my, 0.9, shade(pal.trim, 1.2))
 
     # --- грязь и износ
-    for _ in range(25 if not small else 5):
+    for _ in range(8 if industrial else 25 if not small else 5):
         x = rng.uniform(stern * 0.9, bow * 0.8)
         yy = rng.uniform(-1, 1) * half_width(hull_key, x) * 0.8
         r = rng.uniform(0.3, 1.1)
@@ -331,7 +639,11 @@ def _static_modules(cv, hull_key, pal, static_modules, bow, stern, half_w):
             for side in (-1, 1):
                 x = stern * 0.8
                 while x < bow * 0.55:
-                    cv.rect(x + 1.4, side * (half_w + 0.35), 2.6, th, pal.armor, radius=0.15)
+                    local_width = (half_width(hull_key, x + 1.4)
+                                   if HULLS[hull_key].visual is not None else half_w)
+                    if local_width > 0.8:
+                        cv.rect(x + 1.4, side * (local_width * 0.85), 2.6, th,
+                                pal.armor, radius=0.15)
                     x += 3.2
         elif cat == "engine":
             n = 1 if m.size == 1 else 2
@@ -381,9 +693,9 @@ def _damage(cv, hull_key, level, pts, half_w, bow, stern):
 
 # --- турели ------------------------------------------------------------------
 
-def build_turret(module_key, pal_key):
-    """Башня/установка: ствол вдоль +X. Детали: погон, люки, дульные тормоза, дальномер."""
-    pal = SHIP_PALETTES[pal_key]
+def build_turret(module_key, pal_key, industrial=False):
+    """Башня/установка: ствол вдоль +X. Единый материал с корпусом R1.1."""
+    pal = industrial_palette(pal_key) if industrial else SHIP_PALETTES[pal_key]
     cv = _Canvas(10)
     body, dark = pal.turret, shade(pal.turret, 0.5)
     light = shade(pal.turret, 1.3)
@@ -452,11 +764,84 @@ def build_turret(module_key, pal_key):
     return cv.surf
 
 
+
+def draw_compact_hull(screen, cam, ship, pal_key, tier="tactical"):
+    """Far/tactical vector LODs selected by screen-space silhouette length."""
+    pal = industrial_palette(pal_key)
+    geom = outline(ship.hull.key)
+    pts = [cam.w2s(ship.pos + Vector2(x, y).rotate(ship.angle)) for x, y in geom]
+    if len(pts) < 3:
+        return
+    pygame.draw.polygon(screen, pal.trim, pts)
+    inner = [cam.w2s(ship.pos + Vector2(x * 0.96, y * 0.92).rotate(ship.angle))
+             for x, y in geom]
+    pygame.draw.polygon(screen, pal.hull, inner)
+    pygame.draw.aalines(screen, shade(pal.superstructure, 0.87), True, pts)
+
+    bow, stern = PROFILES[ship.hull.key][0][0], PROFILES[ship.hull.key][-1][0]
+    forward = Vector2(1, 0).rotate(ship.angle)
+    tip = cam.w2s(ship.pos + forward * (bow * 0.8))
+    if tier == "far":
+        # No turret clutter on silhouettes under 24 pixels.
+        pygame.draw.circle(screen, pal.accent, tip, 1)
+        return
+
+    # Primary raised deck, with real outline-dependent side shoulders.
+    def point(x, y):
+        return cam.w2s(ship.pos + Vector2(x, y).rotate(ship.angle))
+
+    pygame.draw.line(screen, shade(pal.deck, 1.1),
+                     point(stern * 0.56, 0), point(bow * 0.62, 0), 2)
+    for x, y, length, width, _ in superstructures(ship.hull.key):
+        corners = ((x - length * 0.5, y - width * 0.5),
+                   (x + length * 0.5, y - width * 0.5),
+                   (x + length * 0.5, y + width * 0.5),
+                   (x - length * 0.5, y + width * 0.5))
+        pygame.draw.polygon(screen, pal.superstructure,
+                            [point(px, py) for px, py in corners])
+    # A few identity-bearing side elements remain at tactical zoom.
+    if ship.hull.key == "needle":
+        for side in (-1, 1):
+            pygame.draw.line(screen, pal.armor, point(-12, side * 3.6),
+                             point(7, side * 3.6), 1)
+    elif ship.hull.key == "manta":
+        for side in (-1, 1):
+            pygame.draw.line(screen, shade(pal.armor, 1.18),
+                             point(-22, side * 9.4), point(5, side * 11.6), 2)
+    elif ship.hull.key == "bastion":
+        for side in (-1, 1):
+            pygame.draw.line(screen, shade(pal.armor, 1.15),
+                             point(-23, side * 10), point(18, side * 9.2), 3)
+    pygame.draw.circle(screen, pal.accent, tip, 2)
+    # At tactical size weapon stations are functional silhouettes, not
+    # detailed rotating sprite images. Far LOD omits them entirely.
+    for weapon in ship.weapons:
+        pos = cam.w2s(weapon.world_pos(ship))
+        radius = 3 if weapon.defn.size > 1 else 2
+        kind = weapon.defn.kind
+        pygame.draw.circle(screen, shade(pal.trim, 1.4), pos, radius + 1)
+        if kind == "missile":
+            pygame.draw.rect(screen, pal.turret,
+                             (round(pos.x - radius), round(pos.y - radius),
+                              radius * 2, radius * 2))
+            pygame.draw.circle(screen, rgb("signal_amber"), pos, 1)
+        elif kind == "torpedo":
+            direction = Vector2(1, 0).rotate(ship.angle + weapon.slot.facing)
+            pygame.draw.line(screen, pal.turret, pos - direction * radius,
+                             pos + direction * (radius + 2), 3)
+        else:
+            pygame.draw.circle(screen, pal.turret, pos, radius)
+            direction = Vector2(1, 0).rotate(ship.angle + weapon.slot.facing)
+            pygame.draw.line(screen, pal.roof, pos,
+                             pos + direction * (radius + 2), 1)
+    if ship.hp < ship.hull.hp * 0.35:
+        pygame.draw.circle(screen, rgb("signal_amber"), cam.w2s(ship.pos), 2)
+
 # --- кэш и отрисовка ------------------------------------------------------
 
 class ShipArt:
     def __init__(self):
-        self.masters = {}
+        self.masters = OrderedDict()
         self.turrets = {}
         self.cache = OrderedDict()
 
@@ -475,18 +860,21 @@ class ShipArt:
         return img
 
     def _hull_master(self, ship, pal_key):
-        static = tuple((k, m) for _, _, m in ship.modules() if m.category in ("armor", "engine", "utility")
-                       for k in [m.key])
+        static = tuple((i, m) for i, _, m in ship.modules() if m.category != "weapon")
         dmg = 0 if ship.hp > ship.hull.hp * 0.6 else 1 if ship.hp > ship.hull.hp * 0.3 else 2
-        key = (ship.hull.key, pal_key, tuple(k for k, _ in static), dmg)
+        key = (ship.hull.key, pal_key, tuple((i, m.key) for i, m in static), dmg)
         m = self.masters.get(key)
         if m is None:
             m = self.masters[key] = build_hull(ship.hull.key, pal_key, static, dmg)
+            if len(self.masters) > MASTER_CACHE_LIMIT:
+                self.masters.popitem(last=False)
+        else:
+            self.masters.move_to_end(key)
         return key, m
 
     def wreck_pieces(self, ship, pal_key):
         """Две половины разбитого корпуса (нос и корма) — мастер-спрайты того же размера."""
-        static = tuple((m.key, m) for _, _, m in ship.modules() if m.category in ("armor", "engine", "utility"))
+        static = tuple((i, m) for i, _, m in ship.modules() if m.category != "weapon")
         hull_img, _ = build_hull(ship.hull.key, pal_key, static, 2)
         w, h = hull_img.get_size()
         cut = w // 2 + int(R * 2)
@@ -503,6 +891,11 @@ class ShipArt:
 
     def draw(self, screen, cam, ship, pal_key, t=0.0, alpha=255, shadow=Vector2(3, 4)):
         """shadow — смещение тени в пикселях (по солнцу); None — без тени (ночь)."""
+        if ship.hull.visual_style == "industrial_sci_fi" and alpha == 255:
+            tier = lod_for_length(hull_length(ship.hull.key) * cam.zoom)
+            if tier != "inspection":
+                draw_compact_hull(screen, cam, ship, pal_key, tier=tier)
+                return
         key, (hull_img, shadow_img) = self._hull_master(ship, pal_key)
         center = cam.w2s(ship.pos)
         if shadow is not None:
@@ -519,7 +912,7 @@ class ShipArt:
         screen.blit(img, img.get_rect(center=center))
 
         for w in ship.weapons:
-            tk = (w.defn.key, pal_key)
+            tk = (w.defn.key, pal_key, ship.hull.visual_style == "industrial_sci_fi")
             master = self.turrets.get(tk)
             if master is None:
                 master = self.turrets[tk] = build_turret(*tk)
@@ -542,8 +935,8 @@ class ShipArt:
                                    max(1, int(cam.px(1.2))))
 
         # вращающаяся антенна радара
-        if ship.sensor and ship.hull.key in MAST:
-            mx, my = MAST[ship.hull.key]
+        if ship.sensor and (ship.hull.visual is not None or ship.hull.key in MAST):
+            mx, my = mast_position(ship.hull.key)
             base = cam.w2s(ship.pos + Vector2(mx, my).rotate(ship.angle))
             if ship.sensor.veil_resist:
                 pygame.draw.circle(screen, (110, 180, 190), base, max(2, int(cam.px(2.0))), 1)
@@ -562,7 +955,7 @@ def nav_lights(ship):
     half = max(y for _, y in prof)
     mid = next((x for x, y in prof if y >= half * 0.95), 0)
     stern = prof[-1][0]
-    mx, my = MAST.get(key, (0, 0))
+    mx, my = mast_position(key)
     pts = [((mid, -half), NAV_RED), ((mid, half), NAV_GREEN), ((stern, 0), NAV_WHITE), ((mx, my), NAV_WHITE)]
     return [(ship.pos + Vector2(x, y).rotate(ship.angle), col) for (x, y), col in pts]
 
@@ -570,7 +963,7 @@ def nav_lights(ship):
 def window_lights(ship):
     """Центры освещённых окон надстроек (для света ночью)."""
     out = []
-    for sx, sy, lx, ly, windows in SUPERSTRUCTURE.get(ship.hull.key, []):
+    for sx, sy, lx, ly, windows in superstructures(ship.hull.key):
         if windows:
             out.append(ship.pos + Vector2(sx + lx / 2, sy).rotate(ship.angle))
     return out
