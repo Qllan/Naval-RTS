@@ -41,6 +41,7 @@ def render(output):
         heading = pygame.font.Font(None, 44)
         label = pygame.font.Font(None, 36)
         small = pygame.font.Font(None, 25)
+        micro = pygame.font.Font(None, 19)
         text = heading.render("NAVAL-RTS  /  VISUAL REDESIGN R1.1", True, MAIN)
         surface.blit(text, (52, 38))
         sub = small.render("Approved industrial steel, distinct top-down frames, three screen-space LODs", True, MUTED)
@@ -64,13 +65,16 @@ def render(output):
             assembled.blit(master, (0, 0))
             center = pygame.Vector2(master.get_width() / 2, master.get_height() / 2)
             for weapon in ship.weapons:
-                turret = build_turret(weapon.defn.key, "player")
+                turret = build_turret(weapon.defn.key, "player",
+                                      industrial=ship.hull.visual_style == "industrial_sci_fi")
                 pos = center + pygame.Vector2(weapon.slot.pos) * R
                 assembled.blit(turret, turret.get_rect(center=(round(pos.x), round(pos.y))))
 
             # The hull is defined with its bow along +X; rotate to bow-up.
             topdown = pygame.transform.rotate(assembled, 90)
-            factor = min(1.0, 406 / topdown.get_width(), 449 / topdown.get_height())
+            bounds = topdown.get_bounding_rect()
+            topdown = topdown.subsurface(bounds).copy()
+            factor = min(2.25, 384 / topdown.get_width(), 378 / topdown.get_height())
             scaled = pygame.transform.smoothscale(
                 topdown,
                 (max(1, round(topdown.get_width() * factor)),
@@ -106,8 +110,8 @@ def render(output):
                 pygame.draw.rect(surface, EDGE, (*dest, 134, 147), 1)
                 size = hull_length(key) * zoom
                 desc = f"{lod_for_length(size).upper()}  {size:.0f}px"
-                surface.blit(small.render(desc, True, MUTED),
-                             (dest[0] + 5, dest[1] + 7))
+                surface.blit(micro.render(desc, True, MUTED),
+                             (dest[0] + 6, dest[1] + 8))
 
         surface.blit(small.render("Game renderer reference  ·  physical hulls / slot positions unchanged",
                                   True, MUTED), (50, 1033))

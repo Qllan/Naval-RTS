@@ -537,9 +537,9 @@ def _damage(cv, hull_key, level, pts, half_w, bow, stern):
 
 # --- турели ------------------------------------------------------------------
 
-def build_turret(module_key, pal_key):
-    """Башня/установка: ствол вдоль +X. Детали: погон, люки, дульные тормоза, дальномер."""
-    pal = SHIP_PALETTES[pal_key]
+def build_turret(module_key, pal_key, industrial=False):
+    """Башня/установка: ствол вдоль +X. Единый материал с корпусом R1.1."""
+    pal = industrial_palette(pal_key) if industrial else SHIP_PALETTES[pal_key]
     cv = _Canvas(10)
     body, dark = pal.turret, shade(pal.turret, 0.5)
     light = shade(pal.turret, 1.3)
@@ -739,7 +739,7 @@ class ShipArt:
         screen.blit(img, img.get_rect(center=center))
 
         for w in ship.weapons:
-            tk = (w.defn.key, pal_key)
+            tk = (w.defn.key, pal_key, ship.hull.visual_style == "industrial_sci_fi")
             master = self.turrets.get(tk)
             if master is None:
                 master = self.turrets[tk] = build_turret(*tk)

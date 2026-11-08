@@ -618,3 +618,15 @@ def test_r11_three_hull_master_sprites_have_distinct_pixels():
     import pygame
     images = [build_hull(key, "player", (), 0)[0] for key in NEW_HULLS]
     assert len({(img.get_size(), pygame.image.tostring(img, "RGBA")) for img in images}) == 3
+
+
+def test_r11_equipment_turret_respects_hull_material_without_recoloring_legacy():
+    import pygame
+    from nine.gfx.ship_art import build_turret
+
+    regular = build_turret("cannon_m", "player", industrial=False)
+    industrial = build_turret("cannon_m", "player", industrial=True)
+    assert regular.get_size() == industrial.get_size()
+    assert pygame.image.tostring(regular, "RGBA") != pygame.image.tostring(industrial, "RGBA")
+    # Existing gameplay module key remains identical; only pigments change.
+    assert "cannon_m" in Ship("manta", (0, 0)).fit
