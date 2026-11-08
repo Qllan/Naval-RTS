@@ -19,7 +19,7 @@ class FlatVeil:
         self.value = value
 
     def density_grid(self, xs, ys, t):
-        return np.full((len(xs), len(ys)), self.value, dtype=float)
+        return np.full((len(ys), len(xs)), self.value, dtype=float)
 
 
 @pytest.mark.parametrize("high", (True, False))
@@ -73,6 +73,7 @@ def test_low_quality_wake_uses_fewer_visual_samples():
 
 
 def test_quality_switch_controls_ocean_and_wakes():
+    pygame.font.init()
     from nine.render import Renderer
     renderer = Renderer(pygame.Surface((320, 200)))
     assert renderer.ocean.high_quality and renderer.wakes.high_quality
