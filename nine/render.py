@@ -155,6 +155,13 @@ class Renderer:
                 self._trader_ship(trader, t)
             elif blip(trader.pos):
                 self._blip(trader.pos, t)
+        for guard in world.trade_traffic.escort_snapshot(world.t):
+            if not cam.visible(guard.pos, 45):
+                continue
+            if seen(guard.pos):
+                self._escort_ship(guard)
+            elif blip(guard.pos):
+                self._blip(guard.pos, t)
         for ph in world.phantoms:                  # галлюцинации неотличимы от настоящих отметок
             if cam.visible(ph["pos"]):
                 self._blip(ph["pos"], t)
@@ -317,6 +324,29 @@ class Renderer:
                 pygame.draw.circle(self.screen, col, c, max(1, int(cam.px(0.7))))
 
     # --------------------------------------------------------------------
+
+    def _escort_ship(self, escort):
+        """Noncombat patrol silhouette, distinct from pirates and traders."""
+        cam = self.cam
+        center = cam.w2s(escort.pos)
+        length = max(5, cam.px(22))
+        half = max(3, cam.px(5))
+        forward = Vector2(1, 0).rotate(escort.angle)
+        side = forward.rotate(90)
+        vertices = (center + forward * (length * 0.6),
+                    center + side * half,
+                    center - forward * (length * 0.52) + side * half * 0.7,
+                    center - forward * (length * 0.52) - side * half * 0.7,
+                    center - side * half)
+        pygame.draw.polygon(self.screen, (70, 101, 135), vertices)
+        pygame.draw.polygon(self.screen, (144, 190, 245), vertices, 2)
+        pygame.draw.line(self.screen, (180, 209, 224),
+                         center - forward * (length * 0.2),
+                         center + forward * (length * 0.18), 2)
+        if escort.underway:
+            stern = center - forward * (length * 0.6)
+            pygame.draw.line(self.screen, (90, 147, 179), stern,
+                             stern - forward * (length * 0.35), 1)
 
     def _trader_ship(self, trader, t):
         """Civilian freighter silhouette; no player weapon or pirate AI side."""
