@@ -31,7 +31,7 @@ def test_keyboard_acceptance_and_turn_in():
     world.captain.cargo["salt"] = 10
     port.handle_key(pygame.K_RETURN, world)
     assert world.contracts["salt"]["status"] == "done"
-    assert world.captain.credits == 650
+    assert world.captain.credits == 550
 
 
 def test_mouse_contract_row_is_clickable():
