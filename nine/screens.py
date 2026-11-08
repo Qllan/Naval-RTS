@@ -583,6 +583,9 @@ class MapScreen(Screen):
             ui.text(s, "РАЗВЕДКА", target + Vector2(0, -radius - 5),
                     (150, 240, 220), 15, anchor="midbottom")
         if self.layers["contacts"] and not dead:
+            for trader in world.trade_traffic.snapshot(world.t):
+                if world.perceives(trader.pos) or world.on_radar(trader.pos):
+                    pygame.draw.circle(s, (95, 212, 190), self.w2m(trader.pos), 3)
             for pi in world.pirates:
                 if world.on_radar(pi.ship.pos) or world.perceives(pi.ship.pos):
                     pygame.draw.circle(s, ui.BAD, self.w2m(pi.ship.pos), 3)
