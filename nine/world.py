@@ -116,6 +116,7 @@ class World:
         self.waypoint = None
         self.codex = {}             # ключ записи → прочитана ли
         self.goals_done = set()
+        self.contracts = {}   # id -> {'status': 'active'|'done', 'start_kills': int}
         self.clock_offset = 0.0     # сдвиг суток (консоль: time)
         self.god = False            # консоль: неуязвимость
         self.last_loss = None       # сводка для экрана гибели
@@ -819,6 +820,51 @@ class World:
         self.player = Ship("capsule", pos, self.player.angle)
         self.in_capsule = True
         self.say("Корабль потерян! Капсула отстрелена — доберитесь до порта.")
+
+    # --- контракты: первый игровой срез (порт) ----------------------------
+
+    CONTRACTS = {
+        "salt": ("Поставка соль-металла", 10, 250),
+        "pirates": ("Охота на рейдеров", 2, 350),
+    }
+
+    def contract_label(self, key):
+        name, amount, reward = self.CONTRACTS[key]
+        state = self.contracts.get(key)
+        if state is None:
+            return f"Контракт: {name} ({amount}) — принять, награда {reward} КК"
+        if state["status"] == "done":
+            return f"Контракт: {name} — выполнен"
+        if key == "salt":
+            progress = min(amount, int(self.captain.cargo.get("salt", 0)))
+        else:
+            progress = min(amount, max(0, self.captain.kills - state["start_kills"]))
+        return f"Контракт: {name} {progress}/{amount} — сдать в порту"
+
+    def contract_action(self, key):
+        """Accept or turn in a contract. A reward can be claimed only once."""
+        if key not in self.CONTRACTS:
+            return False
+        state = self.contracts.get(key)
+        if state is None:
+            self.contracts[key] = {"status": "active", "start_kills": self.captain.kills}
+            self.say(f"Принят контракт: {self.CONTRACTS[key][0]}")
+            return True
+        if state["status"] != "active":
+            return False
+        _, amount, reward = self.CONTRACTS[key]
+        if key == "salt":
+            if self.captain.cargo.get("salt", 0) + 1e-6 < amount:
+                return False
+            self.captain.cargo["salt"] -= amount
+            if self.captain.cargo["salt"] <= 1e-6:
+                del self.captain.cargo["salt"]
+        elif self.captain.kills - state["start_kills"] < amount:
+            return False
+        state["status"] = "done"
+        self.captain.credits += reward
+        self.say(f"Контракт выполнен: +{reward} КК", "good")
+        return True
 
     # --- порт: сервис -----------------------------------------------------
 
