@@ -19,7 +19,7 @@ def setup_board():
 
 def test_contracts_are_on_a_separate_tab_not_service():
     world, port = setup_board()
-    assert len(port.service_items(world)) == 8
+    assert len(port.service_items(world)) == 10
     assert len(port.contract_items(world)) == 3
     assert port._count(world) == 3
 
