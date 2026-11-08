@@ -106,13 +106,13 @@ def test_urgent_save_migration_validation_and_journal():
     assert "urgent" not in save.from_dict(data).contracts
 
 
-def test_fifth_contract_row_can_be_accepted_by_keyboard():
+def test_urgent_contract_row_can_be_accepted_by_keyboard():
     pygame.font.init()
     w = World(seed=9, first_event=1e9)
     ui = PortUI(pygame.Surface((1280, 720)))
     ui.tab = TABS.index("Контракты")
     ui.sel = 4
     ui.draw(w, 0.4)
-    assert len([z for z in ui.zones if z[1] == "row"]) == 5
+    assert len([z for z in ui.zones if z[1] == "row"]) == 6
     ui.handle_key(pygame.K_RETURN, w)
     assert w.contracts["urgent"]["status"] == "active"
