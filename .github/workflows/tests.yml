@@ -38,6 +38,16 @@ jobs:
         with:
           name: naval-rts-hull-preview
           path: hull-preview.png
+      - name: Render Bastion before-and-after art comparison
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python tools/preview_bastion_compare.py --output bastion-before-after.png
+      - name: Upload Bastion art comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: naval-rts-bastion-before-after
+          path: bastion-before-after.png
       - name: Render fitting UI screenshots
         env:
           SDL_VIDEODRIVER: dummy

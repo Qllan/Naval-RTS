@@ -630,3 +630,53 @@ def test_r11_equipment_turret_respects_hull_material_without_recoloring_legacy()
     assert pygame.image.tostring(regular, "RGBA") != pygame.image.tostring(industrial, "RGBA")
     # Existing gameplay module key remains identical; only pigments change.
     assert "cannon_m" in Ship("manta", (0, 0)).fit
+
+
+def test_bastion_r112_has_narrower_illustrated_beam_and_tapered_ends():
+    from nine.gfx.ship_art import PROFILES, half_width
+
+    new_profile = PROFILES["bastion"]
+    peak_half_beam = max(width for _, width in new_profile)
+    assert peak_half_beam == pytest.approx(12.5)
+    assert (14 - peak_half_beam) / 14 == pytest.approx(0.107142857, abs=1e-5)
+    assert half_width("bastion", -33) < 6
+    assert half_width("bastion", 26) < 7
+    assert half_width("bastion", -20) > half_width("bastion", 17)
+
+
+def test_bastion_r112_keeps_original_physics_mounts_and_module_fit():
+    bastion = HULLS["bastion"]
+    assert bastion.shape == ((35, 0), (27, 8), (13, 13), (-23, 14),
+                             (-34, 8), (-36, 0), (-34, -8),
+                             (-23, -14), (13, -13), (27, -8))
+    assert bastion.radius == 30
+    assert (bastion.hp, bastion.mass, bastion.speed_mult, bastion.turn_rate) == (280, 185, 0.82, 76)
+    assert [slot.pos for slot in bastion.slots if slot.category == "weapon"] == [
+        (19, 0), (-22, 0), (0, -11), (0, 11)]
+    assert len(bastion.default_fit) == len(bastion.slots)
+    assert fit_problems(bastion, bastion.default_fit) == []
+
+
+def test_bastion_r112_armor_stays_inside_tapered_visual_body():
+    from nine.gfx.ship_art import half_width
+
+    visual = HULLS["bastion"].visual
+    assert visual is not None
+    for detail in visual.details:
+        px, py = detail.pos
+        lx, ly = detail.size
+        for x in (px - lx / 2, px, px + lx / 2):
+            assert abs(py) + ly / 2 < half_width("bastion", x) + 0.05
+
+
+def test_bastion_r112_before_after_preview_restores_catalog_state(tmp_path):
+    from nine.gfx.ship_art import PROFILES
+    from tools.preview_bastion_compare import OLD_PROFILE, render
+
+    hull_before, profile_before = HULLS["bastion"], tuple(PROFILES["bastion"])
+    assert tuple(profile_before) != OLD_PROFILE
+    dest = tmp_path / "bastion-comparison.png"
+    render(dest)
+    assert dest.exists() and dest.stat().st_size > 1000
+    assert HULLS["bastion"] is hull_before
+    assert tuple(PROFILES["bastion"]) == profile_before

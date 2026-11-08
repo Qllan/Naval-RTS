@@ -219,18 +219,22 @@ _ALL = [
                      None, None),
         series="Конструкторское бюро «Рубеж»", visual_style="industrial_sci_fi",
         visual=HullVisual(
-            render_profile=((35, 0), (31, 3.7), (26, 8.3), (17, 11.3),
-                            (10, 13), (-9, 13.5), (-21, 14),
-                            (-28, 11), (-33, 8), (-36, 0)),
-            superstructures=((-5, 0, 15, 10, True),
-                             (-17, 0, 6, 7, False),
-                             (7, 0, 8, 7, False)),
+            # Only artwork changes: gameplay shape, radius and gun slots stay
+            # intact. The maximum half-beam is now 12.5 instead of 14 (-10.7%).
+            # A longer bow taper and narrower stern read as a heavy warship
+            # rather than a rectangular armored cargo platform.
+            render_profile=((35, 0), (31, 2.4), (26, 6.4), (17, 9.95),
+                            (10, 11.8), (-9, 12.4), (-21, 12.5),
+                            (-28, 9.6), (-33, 5.6), (-36, 0)),
+            superstructures=((-5, 0, 16, 8.6, True),
+                             (-17, 0, 7, 6.6, False),
+                             (7, 0, 8, 6.4, False)),
             mast=(-5, 0), deck_ribs=(-30, -20, -10, 0, 10, 20, 30),
             deck_strips=(0.38, 0.72),
             details=(
                 DeckDetail("spine_channel", (0, 0), (36, 2.8)),
-                DeckDetail("shoulder_guard", (-9, -12), (12, 1.8)),
-                DeckDetail("shoulder_guard", (-9, 12), (12, 1.8)),
+                DeckDetail("shoulder_guard", (-9, -10.65), (14, 1.6)),
+                DeckDetail("shoulder_guard", (-9, 10.65), (14, 1.6)),
                 DeckDetail("armor_plate", (10, -8.5), (9, 4)),
                 DeckDetail("armor_plate", (10, 8.5), (9, 4)),
                 DeckDetail("armor_plate", (-10, -8.5), (9, 4)),
