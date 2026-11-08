@@ -113,6 +113,6 @@ def test_urgent_contract_row_can_be_accepted_by_keyboard():
     ui.tab = TABS.index("Контракты")
     ui.sel = 4
     ui.draw(w, 0.4)
-    assert len([z for z in ui.zones if z[1] == "row"]) == 6
+    assert len([z for z in ui.zones if z[1] == "row"]) == 7
     ui.handle_key(pygame.K_RETURN, w)
     assert w.contracts["urgent"]["status"] == "active"

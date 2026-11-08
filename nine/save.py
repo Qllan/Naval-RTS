@@ -191,6 +191,13 @@ def from_dict(d):
                             or not 0 <= entry["close_seconds"] <= 100000
                             or type(entry.get("arrived")) is not bool):
                         continue
+                if key == "master":
+                    if (entry.get("hub") not in ("port", "platform")
+                            or type(entry.get("amount")) is not int
+                            or entry["amount"] != world.MASTER_ORDER_QUANTITY
+                            or type(entry.get("reward")) is not int
+                            or entry["reward"] != 900):
+                        continue
                 if key == "guild":
                     if (entry.get("hub") not in ("port", "platform")
                             or type(entry.get("amount")) is not int
@@ -218,6 +225,10 @@ def from_dict(d):
                     world.contracts[key]["cycle"] = cycle
                 if key == "scout":
                     world.contracts[key]["explored"] = entry["explored"]
+                elif key == "master":
+                    world.contracts[key].update({
+                        name: entry[name] for name in ("hub", "amount", "reward")
+                    })
                 elif key == "guild":
                     world.contracts[key].update({
                         name: entry[name] for name in ("hub", "amount", "reward")

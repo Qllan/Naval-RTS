@@ -35,7 +35,7 @@ def test_port_reputation_is_independent_and_capped():
     w.captain.cargo["salt"] = 10
     assert w.contract_action("salt")
     assert w.guild_reputation == {"port": 100, "platform": 9}
-    assert w.guild_rank() == "Доверенный партнёр"
+    assert w.guild_rank() == "Мастер гильдии"
     w.active_port = "platform"
     assert w.guild_rank() == "Новичок"
     assert w.service_discount() == 0
@@ -122,5 +122,5 @@ def test_guild_order_visible_in_journal_and_board():
     ui.tab = TABS.index("Контракты")
     ui.sel = 5
     ui.draw(w, 0.5)
-    assert len([v for v in ui.zones if v[1] == "row"]) == 6
+    assert len([v for v in ui.zones if v[1] == "row"]) == 7
     assert w.contracts["guild"]["status"] == "active"
