@@ -26,6 +26,23 @@ def platform_lights(world):
     return lights
 
 
+def platform_activity(t):
+    """Repeatable visual-only motion; no RNG or simulation mutations."""
+    cranes = []
+    for i, x in enumerate((-60, 60)):
+        pivot = Vector2(x, -33)
+        angle = (-65 if x < 0 else -115) + 22 * math.sin(t * 0.42 + i * 1.8)
+        tip = pivot + Vector2(1, 0).rotate(angle) * 34
+        cargo = 8 + 5 * (0.5 + 0.5 * math.sin(t * 0.65 + i))
+        cranes.append((pivot, tip, cargo))
+    # Two small service craft idle and gently bob beside the loading piers.
+    craft = tuple(
+        Vector2(x, -99 + 3 * math.sin(t * 0.8 + phase))
+        for x, phase in ((-66, 0.0), (66, 1.5))
+    )
+    return cranes, craft, (t * 35) % 360
+
+
 class TradePlatformArt:
     """Small cached world-space station with visible approach and docks."""
 
@@ -111,6 +128,43 @@ class TradePlatformArt:
         image = self.scaled[zq]
         center = cam.w2s(pos)
         screen.blit(image, image.get_rect(center=center))
+
+        # Moving crane arms, cargo hoists, radar and service craft are drawn
+        # separately from the cached hull so the station texture stays cached.
+        cranes, craft, radar_angle = platform_activity(world.t)
+        line_width = max(1, round(cam.px(2.2)))
+        for pivot, tip, rope_length in cranes:
+            base = cam.w2s(pos + pivot)
+            end = cam.w2s(pos + tip)
+            pygame.draw.line(screen, (220, 173, 81), base, end, line_width)
+            pygame.draw.line(screen, (112, 94, 62), base + Vector2(2, 2),
+                             end + Vector2(2, 2), 1)
+            lower = cam.w2s(pos + tip + Vector2(0, rope_length))
+            pygame.draw.line(screen, (173, 183, 179), end, lower, 1)
+            box_w = max(3, round(cam.px(6)))
+            box_h = max(3, round(cam.px(4)))
+            cargo_rect = pygame.Rect(0, 0, box_w, box_h)
+            cargo_rect.midtop = lower
+            pygame.draw.rect(screen, (174, 124, 75), cargo_rect)
+            pygame.draw.rect(screen, (57, 65, 66), cargo_rect, 1)
+        for boat in craft:
+            c = cam.w2s(pos + boat)
+            length = max(5, round(cam.px(13)))
+            width = max(3, round(cam.px(5)))
+            shape = (c + Vector2(0, -length / 2),
+                     c + Vector2(width / 2, 0),
+                     c + Vector2(width / 2, length / 2),
+                     c + Vector2(-width / 2, length / 2),
+                     c + Vector2(-width / 2, 0))
+            pygame.draw.polygon(screen, (88, 143, 151), shape)
+            pygame.draw.polygon(screen, (195, 215, 209), shape, 1)
+            pygame.draw.circle(screen, (245, 196, 120), c,
+                               max(1, round(cam.px(1.5))))
+        radar_center = cam.w2s(pos + Vector2(45, 27))
+        arm = Vector2(1, 0).rotate(radar_angle) * max(4, cam.px(13))
+        pygame.draw.line(screen, (205, 238, 225),
+                         radar_center - arm, radar_center + arm, 2)
+        pygame.draw.circle(screen, (212, 244, 231), radar_center, 2)
 
         # Pulsing ring marks the dockable radius; directional guides face north.
         radius = max(1, round(cam.px(C.PORT_RADIUS)))
