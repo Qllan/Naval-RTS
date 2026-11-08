@@ -42,6 +42,7 @@ def to_dict(world):
                     "pending_insurance": cap.pending_insurance, "kills": cap.kills},
         "ship": {
             "hull": p.hull.key, "fit": p.fit, "groups": {str(k): v for k, v in p.groups.items()},
+            "guild_hold_upgrade": p.guild_hold_upgrade,
             "pos": [p.pos.x, p.pos.y], "angle": p.angle, "vel": [p.vel.x, p.vel.y],
             "hp": p.hp, "armor": p.armor, "shield": p.shield, "capacitor": p.capacitor,
             "fouling": p.fouling, "shield_cd": p.shield_cd,
@@ -130,6 +131,9 @@ def from_dict(d):
     for k, v in d["captain"].items():
         setattr(cap, k, v)
     p = Ship(s["hull"], Vector2(s["pos"]), s["angle"], fit=s["fit"])
+    # Legacy saves contain no guild rack. Reject non-boolean values.
+    p.guild_hold_upgrade = (s.get("guild_hold_upgrade") is True
+                            and p.hull.purchasable)
     weapon_indices = {w.index for w in p.weapons}
     p.groups.update({int(k): int(v) for k, v in s.get("groups", {}).items()
                      if int(k) in weapon_indices and type(v) is int and v in (0, 1, 2)})

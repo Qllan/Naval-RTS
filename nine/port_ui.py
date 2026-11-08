@@ -255,7 +255,7 @@ class PortUI:
         ]
 
     def trade_items(self, world):
-        """Pairs of buy/sell actions; positions match clickable rows."""
+        """Ordinary goods plus rank-gated guild merchandise."""
         items = []
         for kind, resource in RESOURCES.items():
             price_buy = world.market_price(kind, True) * C.MARKET_PACK_SIZE
@@ -268,6 +268,17 @@ class PortUI:
             items.append((f"Продать до {C.MARKET_PACK_SIZE} · {resource.name} "
                           f"({quantity:.1f} на борту) — {price_sell} КК/ед.",
                           lambda k=kind: world.sell_resource(k)))
+        if world.guild_reputation[world.active_port] >= world.GUILD_GOODS_AT:
+            items.append((
+                f"Резерв гильдии: филаменты ×5 — {world.guild_goods_cost()} КК "
+                f"(местный склад: {world.market_available('filament')})",
+                world.buy_guild_goods))
+        if world.guild_reputation[world.active_port] >= world.GUILD_HOLD_AT:
+            status = "УСТАНОВЛЕНО" if world.player.guild_hold_upgrade else (
+                f"{world.GUILD_HOLD_COST} КК")
+            items.append((
+                f"Усиленный трюм: +12 вместимости — {status}",
+                world.buy_guild_hold_upgrade))
         return items
 
     def contract_items(self, world):
@@ -933,7 +944,7 @@ class PortUI:
         self.text("Цены за единицу товара · Покупка и продажа партиями до 10 ед.",
                   (body.x, body.y + 43), DIM, self.small)
         rows = [(label, UI) for label, _ in self.trade_items(world)]
-        self._list(rows, body.x + 8, body.y + 90, 675, self.sel, row_h=34)
+        self._list(rows, body.x + 8, body.y + 90, 675, self.sel, row_h=30)
         x, y = body.right - 302, body.y + 90
         self.text("СРАВНЕНИЕ РЫНКОВ", (x, y), UI, self.small)
         y += 38
@@ -949,7 +960,8 @@ class PortUI:
                 kind, "port" if world.active_port == "platform" else "platform")
             self.text(f"Запасы: {local} / {remote}", (x, y + 44), DIM, self.small)
             y += 75
-        self.text(f"Трюм: {world.cargo_used:.1f}/{world.cargo_capacity:.0f}",
+        self.text(f"Трюм: {world.cargo_used:.1f}/{world.cargo_capacity:.0f}"
+                  f" · Гильдия: {world.guild_rank()}",
                   (body.x, body.bottom - 35), DIM, self.small)
         self.text(world.market_bulletin(), (body.x, body.bottom - 65),
                   ACCENT, self.small)

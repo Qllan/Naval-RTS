@@ -197,6 +197,7 @@ class Ship:
         self.boosting = False
         self.fouling = 0.0
         self.cargo_mass = 0.0
+        self.guild_hold_upgrade = False
         self.shield_cd = 0.0
         self.brownout = False
         self.reload_penalty = 1.0          # внешние штрафы (травма капитана)
@@ -337,7 +338,8 @@ class Ship:
 
     @property
     def cargo_capacity(self):
-        return int(self.hull.cargo + self.cargo_bonus)
+        return int(self.hull.cargo + self.cargo_bonus
+                   + (12 if self.guild_hold_upgrade else 0))
 
     @property
     def value(self):

@@ -1253,6 +1253,45 @@ class World:
             return 0
         return self.market_stock[port_key or self.active_port][kind]
 
+    GUILD_GOODS_AT = 50
+    GUILD_GOODS_QUANTITY = 5
+    GUILD_HOLD_COST = 650
+    GUILD_HOLD_AT = 75
+
+    def guild_goods_cost(self):
+        """Five reserve filaments at 10% off local buying price."""
+        return max(1, math.ceil(
+            self.market_price("filament", buying=True)
+            * self.GUILD_GOODS_QUANTITY * 0.90))
+
+    def buy_guild_goods(self):
+        """Guild reserve stock is ordinary inventory, not generated from air."""
+        amount = self.GUILD_GOODS_QUANTITY
+        if (self.guild_reputation[self.active_port] < self.GUILD_GOODS_AT
+                or self.captain.debt > 0
+                or self.market_available("filament") < amount
+                or self.cargo_used + amount > self.cargo_capacity):
+            return False
+        cost = self.guild_goods_cost()
+        if self.captain.credits < cost:
+            return False
+        self.captain.credits -= cost
+        self.market_stock[self.active_port]["filament"] -= amount
+        self.captain.cargo["filament"] = self.captain.cargo.get("filament", 0) + amount
+        return True
+
+    def buy_guild_hold_upgrade(self):
+        """Reinforce the current hull once; replacement hulls need a new rack."""
+        if (self.guild_reputation[self.active_port] < self.GUILD_HOLD_AT
+                or self.captain.debt > 0
+                or self.player.guild_hold_upgrade
+                or self.captain.credits < self.GUILD_HOLD_COST
+                or self.in_capsule):
+            return False
+        self.captain.credits -= self.GUILD_HOLD_COST
+        self.player.guild_hold_upgrade = True
+        return True
+
     def buy_resource(self, kind, quantity=C.MARKET_PACK_SIZE):
         """Purchase market cargo without exceeding credit or hold limits."""
         if (kind not in RESOURCES or type(quantity) is not int
