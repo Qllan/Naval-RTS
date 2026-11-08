@@ -20,8 +20,8 @@ def setup_board():
 def test_contracts_are_on_a_separate_tab_not_service():
     world, port = setup_board()
     assert len(port.service_items(world)) == 8
-    assert len(port.contract_items(world)) == 5
-    assert port._count(world) == 5
+    assert len(port.contract_items(world)) == 6
+    assert port._count(world) == 6
 
 
 def test_keyboard_acceptance_and_turn_in():
@@ -31,14 +31,14 @@ def test_keyboard_acceptance_and_turn_in():
     world.captain.cargo["salt"] = 10
     port.handle_key(pygame.K_RETURN, world)
     assert world.contracts["salt"]["status"] == "done"
-    assert world.captain.credits == 550
+    assert world.captain.credits == 650
 
 
 def test_mouse_contract_row_is_clickable():
     world, port = setup_board()
     port.draw(world, 0.4)
     rows = sorted((idx, rect) for rect, kind, idx in port.zones if kind == "row")
-    assert len(rows) == 5
+    assert len(rows) == 6
     port.handle_event(pygame.event.Event(
         pygame.MOUSEBUTTONDOWN, {"pos": rows[1][1].center, "button": 1}), world)
     assert world.contracts["pirates"]["status"] == "active"
